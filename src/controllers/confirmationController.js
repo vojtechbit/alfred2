@@ -64,7 +64,7 @@ async function confirmMacroOperation(req, res) {
       }
 
       result = await facadeService.completeCalendarScheduleEnrichment(
-        req.user.googleSub,
+        req.user.microsoftId,
         confirmToken,
         action
       );
@@ -81,7 +81,7 @@ async function confirmMacroOperation(req, res) {
       }
 
       result = await facadeService.completeContactsDeduplication(
-        req.user.googleSub,
+        req.user.microsoftId,
         confirmToken,
         normalizedAction
       );

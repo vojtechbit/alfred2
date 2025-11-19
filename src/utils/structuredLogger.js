@@ -169,7 +169,7 @@ function requestContextMiddleware(req, res, next) {
   // Store in global context (async-safe with AsyncLocalStorage would be better)
   globalThis.__requestContext = {
     requestId,
-    userId: req.user?.googleSub,
+    userId: req.user?.microsoftId,
     path: req.path,
     method: req.method
   };

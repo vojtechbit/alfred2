@@ -60,15 +60,15 @@ async function verifyToken(req, res, next) {
     }
 
     // STRATEGY 1: Try to find user by proxy token (ChatGPT flow)
-    const googleSubFromProxy = await findUserByProxyToken(token);
+    const microsoftIdFromProxy = await findUserByProxyToken(token);
 
-    if (googleSubFromProxy) {
+    if (microsoftIdFromProxy) {
       // Token is a valid proxy token - get user info from database
       verificationMethod = 'proxy';
-      logMetadata.proxyGoogleSub = googleSubFromProxy;
+      logMetadata.proxyGoogleSub = microsoftIdFromProxy;
 
       const { getUserByGoogleSub } = await import('../services/databaseService.js');
-      const user = await getUserByGoogleSub(googleSubFromProxy);
+      const user = await getUserByGoogleSub(microsoftIdFromProxy);
 
       if (!user) {
         status = 'error';
@@ -83,7 +83,7 @@ async function verifyToken(req, res, next) {
       
       // Attach user info to request
       req.user = {
-        googleSub: user.googleSub,
+        microsoftId: user.microsoftId,
         email: user.email,
         name: user.email.split('@')[0],
         picture: null,
@@ -93,7 +93,7 @@ async function verifyToken(req, res, next) {
       };
 
       logMetadata.userEmail = user.email;
-      logMetadata.googleSub = user.googleSub;
+      logMetadata.microsoftId = user.microsoftId;
       return next();
     }
 
@@ -103,21 +103,21 @@ async function verifyToken(req, res, next) {
     if (cachedIdentity) {
       verificationMethod = 'google-cache';
       logMetadata.cacheSource = cachedIdentity.source || 'memory';
-      logMetadata.googleSub = cachedIdentity.googleSub;
+      logMetadata.microsoftId = cachedIdentity.microsoftId;
 
       let email = cachedIdentity.email;
       let dbUser = null;
 
       if (!email) {
         const { getUserByGoogleSub } = await import('../services/databaseService.js');
-        dbUser = await getUserByGoogleSub(cachedIdentity.googleSub);
+        dbUser = await getUserByGoogleSub(cachedIdentity.microsoftId);
         email = dbUser?.email || null;
       }
 
       req.user = {
-        googleSub: cachedIdentity.googleSub,
+        microsoftId: cachedIdentity.microsoftId,
         email,
-        name: email ? email.split('@')[0] : cachedIdentity.googleSub,
+        name: email ? email.split('@')[0] : cachedIdentity.microsoftId,
         picture: null,
         accessToken: token,
         tokenType: 'google-cache'
@@ -183,10 +183,10 @@ async function verifyToken(req, res, next) {
     }
 
     // Extract user identification
-    const googleSub = userInfo.id;
+    const microsoftId = userInfo.id;
     const email = userInfo.email;
 
-    if (!googleSub) {
+    if (!microsoftId) {
       console.error('❌ [AUTH_ERROR] Google sub not found in token');
       return res.status(401).json({
         error: 'Unauthorized',
@@ -196,7 +196,7 @@ async function verifyToken(req, res, next) {
 
     // Attach user info to request
     req.user = {
-      googleSub,
+      microsoftId,
       email,
       name: userInfo.name,
       picture: userInfo.picture,
@@ -204,12 +204,12 @@ async function verifyToken(req, res, next) {
       tokenType: 'google'
     };
 
-    logMetadata.googleSub = googleSub;
+    logMetadata.microsoftId = microsoftId;
     logMetadata.userEmail = email;
 
     await cacheAccessTokenIdentity({
       accessToken: token,
-      googleSub,
+      microsoftId,
       email,
       source: 'google-userinfo'
     }).catch(cacheError =>
@@ -236,8 +236,8 @@ async function verifyToken(req, res, next) {
       message: 'Authentication failed'
     });
   } finally {
-    if (!logMetadata.googleSub && req.user?.googleSub) {
-      logMetadata.googleSub = req.user.googleSub;
+    if (!logMetadata.microsoftId && req.user?.microsoftId) {
+      logMetadata.microsoftId = req.user.microsoftId;
     }
 
     if (!logMetadata.userEmail && req.user?.email) {
@@ -266,7 +266,7 @@ async function requireDatabaseUser(req, res, next) {
   try {
     const { getUserByGoogleSub } = await import('../services/databaseService.js');
     
-    const user = await getUserByGoogleSub(req.user.googleSub);
+    const user = await getUserByGoogleSub(req.user.microsoftId);
 
     if (!user) {
       console.log('⚠️  User not found in database:', req.user.email);
@@ -284,7 +284,7 @@ async function requireDatabaseUser(req, res, next) {
   } catch (error) {
     console.error('❌ [AUTH_ERROR] Database check failed');
     console.error('Details:', {
-      googleSub: req.user.googleSub,
+      microsoftId: req.user.microsoftId,
       errorMessage: error.message,
       timestamp: new Date().toISOString()
     });

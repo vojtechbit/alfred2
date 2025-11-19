@@ -10,7 +10,7 @@ import * as facadeService from '../services/facadeService.js';
 
 async function macroInboxOverview(req, res) {
   try {
-    const result = await facadeService.inboxOverview(req.user.googleSub, req.body);
+    const result = await facadeService.inboxOverview(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro inbox overview failed:', error.message);
@@ -41,7 +41,7 @@ async function macroInboxOverview(req, res) {
 
 async function macroInboxSnippets(req, res) {
   try {
-    const result = await facadeService.inboxSnippets(req.user.googleSub, req.body);
+    const result = await facadeService.inboxSnippets(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro inbox snippets failed:', error.message);
@@ -72,7 +72,7 @@ async function macroInboxSnippets(req, res) {
 
 async function macroInboxUserUnanswered(req, res) {
   try {
-    const result = await facadeService.inboxUserUnansweredRequests(req.user.googleSub, req.body);
+    const result = await facadeService.inboxUserUnansweredRequests(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro inbox user unanswered requests failed:', error.message);
@@ -103,7 +103,7 @@ async function macroInboxUserUnanswered(req, res) {
 
 async function macroEmailQuickRead(req, res) {
   try {
-    const result = await facadeService.emailQuickRead(req.user.googleSub, req.body);
+    const result = await facadeService.emailQuickRead(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro email quick read failed:', error.message);
@@ -136,7 +136,7 @@ async function macroEmailQuickRead(req, res) {
 
 async function macroBriefingsMeetingEmailsToday(req, res) {
   try {
-    const result = await facadeService.meetingEmailsToday(req.user.googleSub, req.body || {});
+    const result = await facadeService.meetingEmailsToday(req.user.microsoftId, req.body || {});
     res.json(result);
   } catch (error) {
     console.error('❌ Macro briefing meeting emails today failed:', error.message);
@@ -169,7 +169,7 @@ async function macroBriefingsMeetingEmailsToday(req, res) {
 
 async function macroCalendarPlan(req, res) {
   try {
-    const result = await facadeService.calendarPlan(req.user.googleSub, req.body);
+    const result = await facadeService.calendarPlan(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro calendar plan failed:', error.message);
@@ -192,7 +192,7 @@ async function macroCalendarPlan(req, res) {
 
 async function macroCalendarSchedule(req, res) {
   try {
-    const result = await facadeService.calendarSchedule(req.user.googleSub, req.body);
+    const result = await facadeService.calendarSchedule(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro calendar schedule failed:', error.message);
@@ -232,7 +232,7 @@ async function macroCalendarSchedule(req, res) {
 
 async function macroCalendarReminderDrafts(req, res) {
   try {
-    const result = await facadeService.calendarReminderDrafts(req.user.googleSub, req.body);
+    const result = await facadeService.calendarReminderDrafts(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro calendar reminder drafts failed:', error.message);
@@ -255,7 +255,7 @@ async function macroCalendarReminderDrafts(req, res) {
 
 async function macroCalendarListCalendars(req, res) {
   try {
-    const result = await facadeService.calendarListCalendars(req.user.googleSub);
+    const result = await facadeService.calendarListCalendars(req.user.microsoftId);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro calendar list calendars failed:', error.message);
@@ -305,7 +305,7 @@ async function macroContactsSafeAdd(req, res) {
 
 async function macroTasksOverview(req, res) {
   try {
-    const result = await facadeService.tasksOverview(req.user.googleSub, req.body);
+    const result = await facadeService.tasksOverview(req.user.microsoftId, req.body);
     res.json(result);
   } catch (error) {
     console.error('❌ Macro tasks overview failed:', error.message);

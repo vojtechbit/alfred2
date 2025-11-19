@@ -7,13 +7,13 @@
 import { wrapModuleFunctions } from '../utils/advancedDebugging.js';
 
 
-import * as gmailService from './googleApiService.js';
-import * as calendarService from './googleApiService.js';
+import * as gmailService from './microsoftGraphService.js';
+import * as calendarService from './microsoftGraphService.js';
 import * as contactsService from './contactsService.js';
 import * as tasksService from './tasksService.js';
 import { createServiceError, throwServiceError } from './serviceErrors.js';
 import { getUserByGoogleSub } from './databaseService.js';
-import { classifyEmailCategory } from './googleApiService.js';
+import { classifyEmailCategory } from './microsoftGraphService.js';
 import { startTimer, logDuration } from '../utils/performanceLogger.js';
 import {
   parseRelativeTime,
@@ -150,7 +150,7 @@ function resolveCreatePendingConfirmation() {
  * Step 2: Batch fetch metadata for all messages
  * Step 3: Return enriched items with sender, subject, etc.
  */
-async function inboxOverview(googleSub, params = {}) {
+async function inboxOverview(microsoftId, params = {}) {
   const {
     timeRange,
     maxItems = 100,
@@ -233,7 +233,7 @@ async function inboxOverview(googleSub, params = {}) {
 
     if (cleanedIdentifiers.length > 0) {
       requestedLabelCount = cleanedIdentifiers.length;
-      labelResolution = await gmail.resolveLabelIdentifiers(googleSub, cleanedIdentifiers);
+      labelResolution = await gmail.resolveLabelIdentifiers(microsoftId, cleanedIdentifiers);
 
       const appliedIds = labelResolution.appliedLabelIds || [];
       appliedIds.forEach(id => {
@@ -317,7 +317,7 @@ async function inboxOverview(googleSub, params = {}) {
 
   const builtQuery = queryParts.join(' ').trim();
 
-  const searchResults = await gmail.searchEmails(googleSub, {
+  const searchResults = await gmail.searchEmails(microsoftId, {
     query: builtQuery || undefined,
     maxResults: Math.min(maxItems, 200),
     pageToken
@@ -343,7 +343,7 @@ async function inboxOverview(googleSub, params = {}) {
     const batch = messageIds.slice(i, i + batchSize);
     const batchPromise = Promise.all(
       batch.map(id =>
-        gmail.readEmail(googleSub, id, { format: 'metadata' })
+        gmail.readEmail(microsoftId, id, { format: 'metadata' })
           .catch(err => {
             console.error(`Failed to fetch metadata for ${id}:`, err.message);
             return null;
@@ -411,11 +411,11 @@ async function inboxOverview(googleSub, params = {}) {
 /**
  * Inbox Snippets - overview with snippets and attachment URLs
  */
-async function inboxSnippets(googleSub, params = {}) {
+async function inboxSnippets(microsoftId, params = {}) {
   const { includeAttachments = true } = params;
 
   const gmail = resolveGmailService();
-  const overview = await inboxOverview(googleSub, params);
+  const overview = await inboxOverview(microsoftId, params);
 
   if (overview.items.length === 0) {
     const emptyResponse = {
@@ -443,7 +443,7 @@ async function inboxSnippets(googleSub, params = {}) {
     const batchPromise = Promise.all(
       batch.map(async (item) => {
         try {
-          const preview = await gmail.getEmailPreview(googleSub, item.messageId, {
+          const preview = await gmail.getEmailPreview(microsoftId, item.messageId, {
             maxBytes: 4096
           });
 
@@ -582,7 +582,7 @@ function generateFallbackSearchQueries(originalQuery) {
  * Tries: 3 days → 7 days → 14 days → 30 days
  * Returns { messages, timeRange, attemptedTimeRanges } where timeRange is the successful one
  */
-async function searchEmailsWithProgressiveTime(googleSub, searchQuery, options = {}) {
+async function searchEmailsWithProgressiveTime(microsoftId, searchQuery, options = {}) {
   const { maxResults = 100, pageToken, filters = {} } = options;
   const gmail = resolveGmailService();
 
@@ -637,7 +637,7 @@ async function searchEmailsWithProgressiveTime(googleSub, searchQuery, options =
 
     const finalQuery = queryParts.join(' ');
 
-    const result = await gmail.searchEmails(googleSub, {
+    const result = await gmail.searchEmails(microsoftId, {
       query: finalQuery,
       maxResults,
       pageToken
@@ -674,7 +674,7 @@ async function searchEmailsWithProgressiveTime(googleSub, searchQuery, options =
  *
  * Returns comprehensive result with all attempted strategies
  */
-async function searchEmailsSmart(googleSub, searchQuery, options = {}) {
+async function searchEmailsSmart(microsoftId, searchQuery, options = {}) {
   const { maxResults = 100, pageToken, filters = {}, enableFallback = true } = options;
 
   const attemptLog = {
@@ -685,7 +685,7 @@ async function searchEmailsSmart(googleSub, searchQuery, options = {}) {
 
   // Strategy 1: Try progressive time ranges with original query
   if (enableFallback) {
-    const timeResult = await searchEmailsWithProgressiveTime(googleSub, searchQuery, {
+    const timeResult = await searchEmailsWithProgressiveTime(microsoftId, searchQuery, {
       maxResults,
       pageToken,
       filters
@@ -711,7 +711,7 @@ async function searchEmailsSmart(googleSub, searchQuery, options = {}) {
     attemptLog.queries = fallbackQueries;
 
     for (const query of fallbackQueries) {
-      const result = await searchEmailsWithFallback(googleSub, query, {
+      const result = await searchEmailsWithFallback(microsoftId, query, {
         maxResults,
         pageToken,
         enableFallback: false // Don't recurse
@@ -745,13 +745,13 @@ async function searchEmailsSmart(googleSub, searchQuery, options = {}) {
  * Search emails with automatic fallback to less strict queries
  * Returns { messages, query, attemptedQueries } where query is the successful query used
  */
-async function searchEmailsWithFallback(googleSub, searchQuery, options = {}) {
+async function searchEmailsWithFallback(microsoftId, searchQuery, options = {}) {
   const { maxResults = 100, pageToken, enableFallback = true } = options;
   const gmail = resolveGmailService();
 
   if (!enableFallback) {
     // Just do a single search without fallback
-    const result = await gmail.searchEmails(googleSub, {
+    const result = await gmail.searchEmails(microsoftId, {
       query: searchQuery,
       maxResults,
       pageToken
@@ -771,7 +771,7 @@ async function searchEmailsWithFallback(googleSub, searchQuery, options = {}) {
   for (const query of fallbackQueries) {
     attemptedQueries.push(query);
 
-    const result = await gmail.searchEmails(googleSub, {
+    const result = await gmail.searchEmails(microsoftId, {
       query,
       maxResults,
       pageToken
@@ -802,7 +802,7 @@ async function searchEmailsWithFallback(googleSub, searchQuery, options = {}) {
 /**
  * Email Quick Read - single or batch read with attachments
  */
-async function emailQuickRead(googleSub, params = {}) {
+async function emailQuickRead(microsoftId, params = {}) {
   const { ids, searchQuery, format, pageToken, enableFallback = true } = params;
 
   const resolvedFormat = format ?? 'full';
@@ -836,7 +836,7 @@ async function emailQuickRead(googleSub, params = {}) {
     const gmail = resolveGmailService();
 
     try {
-      const thread = await gmail.getThread(googleSub, threadId);
+      const thread = await gmail.getThread(microsoftId, threadId);
 
       if (thread && Array.isArray(thread.messages) && thread.messages.length > 0) {
         messageIds = thread.messages.map(msg => msg.id);
@@ -870,7 +870,7 @@ async function emailQuickRead(googleSub, params = {}) {
     }
   } else if (!messageIds && searchQuery) {
     // If searchQuery provided (but not thread ID), get IDs first (with optional fallback)
-    const searchResult = await searchEmailsWithFallback(googleSub, searchQuery, {
+    const searchResult = await searchEmailsWithFallback(microsoftId, searchQuery, {
       maxResults: 100,
       pageToken,
       enableFallback
@@ -919,7 +919,7 @@ async function emailQuickRead(googleSub, params = {}) {
 
   // Decide single vs batch
   if (messageIds.length === 1) {
-    const message = await gmail.readEmail(googleSub, messageIds[0], { format: resolvedFormat });
+    const message = await gmail.readEmail(microsoftId, messageIds[0], { format: resolvedFormat });
     const enriched = enrichEmailWithAttachments(message, messageIds[0]);
 
     const result = {
@@ -936,7 +936,7 @@ async function emailQuickRead(googleSub, params = {}) {
     return result;
   } else {
     const messages = await Promise.all(
-      messageIds.map(id => gmail.readEmail(googleSub, id, { format: resolvedFormat }))
+      messageIds.map(id => gmail.readEmail(microsoftId, id, { format: resolvedFormat }))
     );
 
     const enriched = messages.map((msg, idx) =>
@@ -958,7 +958,7 @@ async function emailQuickRead(googleSub, params = {}) {
   }
 }
 
-async function inboxUserUnansweredRequests(googleSub, params = {}) {
+async function inboxUserUnansweredRequests(microsoftId, params = {}) {
   const {
     includeUnread = true,
     includeRead = true,
@@ -1023,9 +1023,9 @@ async function inboxUserUnansweredRequests(googleSub, params = {}) {
   const database = resolveDatabaseService();
 
   const [labels, userRecord, userAddressesRaw] = await Promise.all([
-    gmail.listLabels(googleSub),
-    database.getUserByGoogleSub(googleSub).catch(() => null),
-    gmail.getUserAddresses(googleSub).catch(() => [])
+    gmail.listLabels(microsoftId),
+    database.getUserByGoogleSub(microsoftId).catch(() => null),
+    gmail.getUserAddresses(microsoftId).catch(() => [])
   ]);
 
   let trackingLabelRecommendation = buildLabelRecommendation(
@@ -1037,7 +1037,7 @@ async function inboxUserUnansweredRequests(googleSub, params = {}) {
   // Auto-create tracking label if it doesn't exist
   if (autoAddLabels !== false && !trackingLabelRecommendation.existingLabel) {
     try {
-      const createdTrackingLabel = await gmail.createLabel(googleSub, {
+      const createdTrackingLabel = await gmail.createLabel(microsoftId, {
         name: TRACKING_LABEL_NAME,
         color: TRACKING_LABEL_DEFAULTS.color,
         labelListVisibility: 'labelHide', // Hide from label list by default
@@ -1096,7 +1096,7 @@ async function inboxUserUnansweredRequests(googleSub, params = {}) {
 
   if (autoAddLabels !== false && !labelRecommendation.existingLabel) {
     try {
-      const createdLabel = await gmail.createLabel(googleSub, {
+      const createdLabel = await gmail.createLabel(microsoftId, {
         name: normalizedLabelName,
         color: watchlistLabelColor,
         labelListVisibility: 'labelShow',
@@ -1177,7 +1177,7 @@ async function inboxUserUnansweredRequests(googleSub, params = {}) {
   );
 
   const searchOptions = {
-    googleSub,
+    microsoftId,
     baseQuery,
     limit,
     userAddresses: Array.from(userAddressSet),
@@ -1199,7 +1199,7 @@ async function inboxUserUnansweredRequests(googleSub, params = {}) {
 
   if (autoAddLabels !== false) {
     await autoApplyWatchlistLabels({
-      googleSub,
+      microsoftId,
       gmail,
       targetLabel: labelRecommendation.existingLabel,
       trackingLabel: trackingLabelRecommendation.existingLabel,
@@ -1264,7 +1264,7 @@ const MAX_MEETING_BRIEFING_SEARCH_RESULTS = 10;
 const MAX_MEETING_BRIEFING_AUTO_KEYWORDS = 5;
 const MAX_MEETING_BRIEFING_SEARCH_VARIANTS = 30;
 
-async function meetingEmailsToday(googleSub, rawParams = {}) {
+async function meetingEmailsToday(microsoftId, rawParams = {}) {
   const params = rawParams || {};
   const {
     date,
@@ -1290,7 +1290,7 @@ async function meetingEmailsToday(googleSub, rawParams = {}) {
   const calendarApi = resolveCalendarService();
   const gmail = resolveGmailService();
 
-  const eventsResponse = await calendarApi.listCalendarEvents(googleSub, {
+  const eventsResponse = await calendarApi.listCalendarEvents(microsoftId, {
     calendarId: safeCalendarId,
     timeMin: dayStartUtc.toISOString(),
     timeMax: nextDayUtc.toISOString(),
@@ -1308,7 +1308,7 @@ async function meetingEmailsToday(googleSub, rawParams = {}) {
     const processed = await buildMeetingBriefingEntry({
       event,
       gmail,
-      googleSub,
+      microsoftId,
       timeWindowClause,
       keywordHints,
       metadataCache,
@@ -1465,7 +1465,7 @@ function formatDateParts(parts) {
   return `${year}-${month}-${day}`;
 }
 
-async function buildMeetingBriefingEntry({ event, gmail, googleSub, timeWindowClause, keywordHints, metadataCache, accumulatedWarnings }) {
+async function buildMeetingBriefingEntry({ event, gmail, microsoftId, timeWindowClause, keywordHints, metadataCache, accumulatedWarnings }) {
   if (!event || typeof event !== 'object') {
     return null;
   }
@@ -1540,7 +1540,7 @@ async function buildMeetingBriefingEntry({ event, gmail, googleSub, timeWindowCl
     const query = buildBriefingGmailQuery(timeWindowClause, descriptor);
 
     try {
-      const searchResult = await gmail.searchEmails(googleSub, {
+      const searchResult = await gmail.searchEmails(microsoftId, {
         query,
         maxResults: MAX_MEETING_BRIEFING_SEARCH_RESULTS
       });
@@ -1567,7 +1567,7 @@ async function buildMeetingBriefingEntry({ event, gmail, googleSub, timeWindowCl
 
         const metadata = await fetchBriefingMessageMetadata({
           gmail,
-          googleSub,
+          microsoftId,
           messageId: messageRef.id,
           cache: metadataCache,
           warnings: eventWarnings
@@ -1750,13 +1750,13 @@ function normalizeBriefingSearchCount(result) {
   return 0;
 }
 
-async function fetchBriefingMessageMetadata({ gmail, googleSub, messageId, cache, warnings }) {
+async function fetchBriefingMessageMetadata({ gmail, microsoftId, messageId, cache, warnings }) {
   if (cache.has(messageId)) {
     return cache.get(messageId);
   }
 
   try {
-    const metadata = await gmail.readEmail(googleSub, messageId, { format: 'metadata' });
+    const metadata = await gmail.readEmail(microsoftId, messageId, { format: 'metadata' });
     cache.set(messageId, metadata);
     return metadata;
   } catch (error) {
@@ -1893,7 +1893,7 @@ function dedupeWarnings(warnings) {
 /**
  * Calendar Plan - daily/weekly view with status
  */
-async function calendarPlan(googleSub, params) {
+async function calendarPlan(microsoftId, params) {
   const {
     scope,
     date,
@@ -1930,7 +1930,7 @@ async function calendarPlan(googleSub, params) {
   // Fetch events
   const calendarApi = resolveCalendarService();
 
-  const events = await calendarApi.listCalendarEvents(googleSub, {
+  const events = await calendarApi.listCalendarEvents(microsoftId, {
     calendarId,
     timeMin: start.toISOString(),
     timeMax: end.toISOString(),
@@ -1996,8 +1996,8 @@ async function calendarPlan(googleSub, params) {
   };
 }
 
-async function calendarListCalendars(googleSub) {
-  const calendars = await calendarService.listCalendars(googleSub);
+async function calendarListCalendars(microsoftId) {
+  const calendars = await calendarService.listCalendars(microsoftId);
   return calendars;
 }
 
@@ -2010,7 +2010,7 @@ async function calendarListCalendars(googleSub) {
  * 3. User confirms with /api/macros/confirm endpoint
  * 4. Complete operation with enriched data
  */
-async function calendarSchedule(googleSub, params) {
+async function calendarSchedule(microsoftId, params) {
   const {
     title,
     when,
@@ -2065,7 +2065,7 @@ async function calendarSchedule(googleSub, params) {
     const conflictResults = await Promise.all(
       when.proposals.map(async (proposal) => {
         try {
-          const conflicts = await calendarApi.checkConflicts(googleSub, {
+          const conflicts = await calendarApi.checkConflicts(microsoftId, {
             calendarId,
             start: proposal.start,
             end: proposal.end
@@ -2131,7 +2131,7 @@ async function calendarSchedule(googleSub, params) {
     try {
       // Search for contact in Google Contacts
       const contactsResult = await contactsApi.searchContacts(
-        googleSub,
+        microsoftId,
         primaryAttendee.email
       );
 
@@ -2148,7 +2148,7 @@ async function calendarSchedule(googleSub, params) {
           const suggestedFieldsSnapshot = { ...enrichmentSuggestions };
 
           const confirmation = await createPendingConfirmationFn(
-            googleSub,
+            microsoftId,
             'enrichment',
             {
               operation: 'calendar.schedule',
@@ -2278,7 +2278,7 @@ async function calendarSchedule(googleSub, params) {
   }
 
   // Create event in calendar
-  const event = await calendarApi.createCalendarEvent(googleSub, eventData, {
+  const event = await calendarApi.createCalendarEvent(microsoftId, eventData, {
     calendarId,
     conferenceDataVersion: conference === 'meet' ? 1 : 0
   });
@@ -2309,7 +2309,7 @@ async function calendarSchedule(googleSub, params) {
  * Complete enriched calendar schedule (after user confirms via confirmToken)
  */
 async function completeCalendarScheduleEnrichment(
-  googleSub,
+  microsoftId,
   confirmToken,
   action
 ) {
@@ -2374,7 +2374,7 @@ async function completeCalendarScheduleEnrichment(
     });
   }
 
-  const event = await calendarService.createCalendarEvent(googleSub, {
+  const event = await calendarService.createCalendarEvent(microsoftId, {
     summary: updatedEventData.title,
     start: normalizedStart,
     end: normalizedEnd,
@@ -2434,7 +2434,7 @@ async function completeCalendarScheduleEnrichment(
  * - 'skip': Skip entries with duplicates
  * - 'merge': Auto-merge into existing contacts (>70% match)
  */
-async function contactsSafeAdd(googleSub, params) {
+async function contactsSafeAdd(microsoftId, params) {
   const { entries, dedupeStrategy = 'ask' } = params;
 
   if (!entries || !Array.isArray(entries) || entries.length === 0) {
@@ -2449,7 +2449,7 @@ async function contactsSafeAdd(googleSub, params) {
 
   let existingContacts = [];
   try {
-    const result = await contactsService.listAllContacts(googleSub);
+    const result = await contactsService.listAllContacts(microsoftId);
     existingContacts = result?.contacts || [];
   } catch (error) {
     console.warn('⚠️ Failed to list existing contacts:', error.message);
@@ -2517,7 +2517,7 @@ async function contactsSafeAdd(googleSub, params) {
   if (hasAnyDuplicates && normalizedStrategy === 'ask') {
     // Return pending confirmation for user to decide
     const confirmation = await createPendingConfirmation(
-      googleSub,
+      microsoftId,
       'deduplication',
       {
         operation: 'contacts.safeAdd',
@@ -2548,7 +2548,7 @@ async function contactsSafeAdd(googleSub, params) {
   // ========== STEP 5: Perform bulk operation based on strategy ==========
 
   return await performContactsBulkAdd(
-    googleSub,
+    microsoftId,
     entries,
     duplicateFindings,
     normalizedStrategy
@@ -2559,7 +2559,7 @@ async function contactsSafeAdd(googleSub, params) {
  * Complete deduplication workflow (after user confirms via confirmToken)
  */
 async function completeContactsDeduplication(
-  googleSub,
+  microsoftId,
   confirmToken,
   action // 'keepBoth', 'skip', or 'merge'
 ) {
@@ -2582,7 +2582,7 @@ async function completeContactsDeduplication(
   const { entriesToAdd, duplicateFindings } = confirmation.data;
   
   const result = await performContactsBulkAdd(
-    googleSub,
+    microsoftId,
     entriesToAdd,
     duplicateFindings,
     normalizeDedupeStrategy(action)
@@ -2598,7 +2598,7 @@ async function completeContactsDeduplication(
 /**
  * Tasks Overview - grouped by section
  */
-async function tasksOverview(googleSub, params) {
+async function tasksOverview(microsoftId, params) {
   const { scope, includeCompleted = false, project, labelIds = [] } = params;
   
   // Validate scope parameter
@@ -2629,7 +2629,7 @@ async function tasksOverview(googleSub, params) {
   }
   
   // Fetch tasks
-  const tasks = await tasksService.listTasks(googleSub, {
+  const tasks = await tasksService.listTasks(microsoftId, {
     showCompleted: includeCompleted,
     dueMin: start.toISOString(),
     dueMax: end.toISOString()
@@ -2710,7 +2710,7 @@ function formatTimeRangeForEmail(startIso, endIso) {
  * Reminder Drafts - bulk email reminders for today's events
  * Hybrid approach: prepareOnly (default) returns data for GPT, or creates drafts directly
  */
-async function calendarReminderDrafts(googleSub, params) {
+async function calendarReminderDrafts(microsoftId, params) {
   const {
     window = 'today',
     hours,
@@ -2752,7 +2752,7 @@ async function calendarReminderDrafts(googleSub, params) {
   }
 
   // Fetch upcoming events with attendees
-  const events = await calendarService.listCalendarEvents(googleSub, {
+  const events = await calendarService.listCalendarEvents(microsoftId, {
     calendarId,
     timeMin: start.toISOString(),
     timeMax: end.toISOString(),
@@ -2828,7 +2828,7 @@ async function calendarReminderDrafts(googleSub, params) {
         isGroup: false
       });
 
-      const draftId = await createReminderDraft(googleSub, true, {
+      const draftId = await createReminderDraft(microsoftId, true, {
         to: attendee.email,
         subject,
         body,
@@ -2880,13 +2880,13 @@ function buildReminderBody({
   return `Ahoj${greetingName},\n\njen připomínám, že s tebou počítám na akci "${safeSummary}"\nČas: ${timeRange}${locationText}${eventLink}\n\n${closing}`;
 }
 
-async function createReminderDraft(googleSub, shouldCreate, { to, subject, body, logLabel }) {
+async function createReminderDraft(microsoftId, shouldCreate, { to, subject, body, logLabel }) {
   if (!shouldCreate) {
     return null;
   }
 
   try {
-    const draft = await gmailService.createDraft(googleSub, {
+    const draft = await gmailService.createDraft(microsoftId, {
       to,
       subject,
       body
@@ -3176,7 +3176,7 @@ function describeTimeFilters(filters = {}) {
 }
 
 async function collectUnansweredThreads({
-  googleSub,
+  microsoftId,
   baseQuery,
   querySuffix,
   pageToken,
@@ -3207,7 +3207,7 @@ async function collectUnansweredThreads({
   while (iterations < 5 && items.length < effectiveLimit) {
     iterations += 1;
 
-    const searchResult = await gmailService.searchEmails(googleSub, {
+    const searchResult = await gmailService.searchEmails(microsoftId, {
       query: combinedQuery || undefined,
       maxResults: Math.min(200, Math.max(effectiveLimit * 2, 20)),
       pageToken: currentToken
@@ -3231,7 +3231,7 @@ async function collectUnansweredThreads({
       }
       seenThreads.add(message.threadId);
 
-      const thread = await gmailService.getThread(googleSub, message.threadId);
+      const thread = await gmailService.getThread(microsoftId, message.threadId);
       if (!thread || !Array.isArray(thread.messages) || thread.messages.length === 0) {
         continue;
       }
@@ -3288,7 +3288,7 @@ async function collectUnansweredThreads({
   };
 }
 
-async function autoApplyWatchlistLabels({ googleSub, gmail, targetLabel, trackingLabel, unreadBucket, readBucket }) {
+async function autoApplyWatchlistLabels({ microsoftId, gmail, targetLabel, trackingLabel, unreadBucket, readBucket }) {
   if (!targetLabel?.id || !gmail?.modifyMessageLabels) {
     return;
   }
@@ -3327,7 +3327,7 @@ async function autoApplyWatchlistLabels({ googleSub, gmail, targetLabel, trackin
 
       for (const messageId of uniqueIds) {
         try {
-          await gmail.modifyMessageLabels(googleSub, messageId, {
+          await gmail.modifyMessageLabels(microsoftId, messageId, {
             add: addIds,
             remove: []
           });

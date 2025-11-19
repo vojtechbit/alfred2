@@ -28,8 +28,8 @@ export async function initializeConfirmationStore() {
     // Index for quick lookup by confirmToken
     await collection.createIndex({ confirmToken: 1 }, { unique: true });
     
-    // Index for lookup by googleSub (user's data)
-    await collection.createIndex({ googleSub: 1 });
+    // Index for lookup by microsoftId (user's data)
+    await collection.createIndex({ microsoftId: 1 });
     
     console.log('✅ Confirmation store initialized');
   } catch (error) {
@@ -49,12 +49,12 @@ export function generateConfirmToken() {
 /**
  * Create a pending confirmation
  * 
- * @param {string} googleSub - User's Google sub
+ * @param {string} microsoftId - User's Google sub
  * @param {string} type - 'enrichment' | 'deduplication'
  * @param {object} data - Type-specific data
  * @returns {Promise<{confirmToken, expiresAt}>}
  */
-export async function createPendingConfirmation(googleSub, type, data) {
+export async function createPendingConfirmation(microsoftId, type, data) {
   if (!['enrichment', 'deduplication'].includes(type)) {
     throw new Error('Invalid confirmation type');
   }
@@ -65,7 +65,7 @@ export async function createPendingConfirmation(googleSub, type, data) {
   
   const confirmation = {
     confirmToken,
-    googleSub,
+    microsoftId,
     type,
     data,
     status: 'pending',
@@ -184,15 +184,15 @@ export async function cancelPendingConfirmation(confirmToken) {
 
 /**
  * Get all pending confirmations for a user (useful for debugging)
- * @param {string} googleSub
+ * @param {string} microsoftId
  * @returns {Promise<array>}
  */
-export async function getUserPendingConfirmations(googleSub) {
+export async function getUserPendingConfirmations(microsoftId) {
   const db = getDatabase();
   const collection = db.collection(COLLECTION_NAME);
   
   const confirmations = await collection
-    .find({ googleSub, status: 'pending' })
+    .find({ microsoftId, status: 'pending' })
     .sort({ createdAt: -1 })
     .limit(10)
     .toArray();

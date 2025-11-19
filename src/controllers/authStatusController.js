@@ -16,16 +16,16 @@ import { debugStep, wrapModuleFunctions } from '../utils/advancedDebugging.js';
 async function getAuthStatus(req, res) {
   try {
     // User info is already attached by authMiddleware
-    const { email, googleSub } = req.user;
+    const { email, microsoftId } = req.user;
 
     console.log('✅ [AUTH_STATUS] User is authenticated:', email);
-    debugStep('Auth status confirmed', { email, googleSub });
+    debugStep('Auth status confirmed', { email, microsoftId });
 
     return res.json({
       authenticated: true,
       email: email,
       message: `✅ Přihlášen jako ${email}`,
-      google_sub: googleSub
+      google_sub: microsoftId
     });
 
   } catch (error) {

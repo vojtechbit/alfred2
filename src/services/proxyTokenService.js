@@ -65,14 +65,14 @@ function generateProxyToken() {
  * Save authorization code to database
  * Used during OAuth flow to exchange for access token
  */
-async function saveAuthCode({ authCode, googleSub, state, chatgptRedirectUri }) {
+async function saveAuthCode({ authCode, microsoftId, state, chatgptRedirectUri }) {
   try {
     const db = await getDatabase();
     const oauthFlows = db.collection('oauth_flows');
 
     const authFlow = {
       auth_code: authCode,
-      google_sub: googleSub,
+      microsoft_id: microsoftId,
       state: state,
       chatgpt_redirect_uri: chatgptRedirectUri,
       created_at: new Date(),
@@ -135,7 +135,7 @@ async function validateAndConsumeAuthCode(authCode) {
 
     console.log('✅ Auth code validated and consumed:', summarizeSecret(authCode));
     return {
-      googleSub: authFlow.google_sub,
+      microsoftId: authFlow.microsoft_id,
       chatgptRedirectUri: authFlow.chatgpt_redirect_uri,
     };
   } catch (error) {
@@ -152,7 +152,7 @@ async function validateAndConsumeAuthCode(authCode) {
  * Save proxy token to database
  * Used by ChatGPT for all API calls
  */
-async function saveProxyToken({ proxyToken, googleSub, expiresIn = 2592000 }) {
+async function saveProxyToken({ proxyToken, microsoftId, expiresIn = 2592000 }) {
   try {
     const db = await getDatabase();
     const proxyTokens = db.collection('proxy_tokens');
@@ -162,7 +162,7 @@ async function saveProxyToken({ proxyToken, googleSub, expiresIn = 2592000 }) {
     const tokenDoc = {
       proxy_token_hash: primaryHash.hash,
       proxy_token_prefix: proxyToken.slice(0, 6),
-      google_sub: googleSub,
+      microsoft_id: microsoftId,
       created_at: new Date(),
       expires_at: new Date(Date.now() + expiresIn * 1000), // expiresIn is in seconds
       last_used: new Date(),
@@ -171,7 +171,7 @@ async function saveProxyToken({ proxyToken, googleSub, expiresIn = 2592000 }) {
 
     await proxyTokens.insertOne(tokenDoc);
 
-    console.log('✅ Proxy token saved for user:', googleSub);
+    console.log('✅ Proxy token saved for user:', microsoftId);
     return proxyToken;
   } catch (error) {
     console.error('❌ [PROXY_TOKEN_ERROR] Failed to save proxy token');
@@ -185,7 +185,7 @@ async function saveProxyToken({ proxyToken, googleSub, expiresIn = 2592000 }) {
 
 /**
  * Find user by proxy token
- * Returns google_sub if valid, null if invalid/expired
+ * Returns microsoft_id if valid, null if invalid/expired
  */
 async function findUserByProxyToken(proxyToken) {
   try {
@@ -259,8 +259,8 @@ async function findUserByProxyToken(proxyToken) {
       { $set: updateDoc }
     );
 
-    console.log('✅ Proxy token validated for user:', matchedDoc.google_sub);
-    return matchedDoc.google_sub;
+    console.log('✅ Proxy token validated for user:', matchedDoc.microsoft_id);
+    return matchedDoc.microsoft_id;
   } catch (error) {
     console.error('❌ [PROXY_TOKEN_ERROR] Failed to find user by proxy token');
     console.error('Details:', {

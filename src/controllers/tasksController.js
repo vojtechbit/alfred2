@@ -65,7 +65,7 @@ async function listTasks(req, res) {
         let truncated = false;
 
         while (true) {
-          const result = await tasksService.listTasks(req.user.googleSub, {
+          const result = await tasksService.listTasks(req.user.microsoftId, {
             maxResults: PAGE_SIZE_DEFAULT,
             pageToken: currentPageToken,
             showCompleted: showCompleted === 'true'
@@ -135,7 +135,7 @@ async function listTasks(req, res) {
           PAGE_SIZE_MAX
         );
 
-        const result = await tasksService.listTasks(req.user.googleSub, {
+        const result = await tasksService.listTasks(req.user.microsoftId, {
           maxResults: pageSize,
           pageToken,
           showCompleted: showCompleted === 'true'
@@ -198,7 +198,7 @@ async function createTask(req, res) {
 
     console.log(`➕ Creating task: ${title}`);
 
-    const task = await tasksService.createTask(req.user.googleSub, {
+    const task = await tasksService.createTask(req.user.microsoftId, {
       title,
       notes,
       due
@@ -240,7 +240,7 @@ async function updateTask(req, res) {
     console.log(`✏️  Updating task ${taskId} in list ${taskListId}`);
 
     const task = await tasksService.updateTask(
-      req.user.googleSub,
+      req.user.microsoftId,
       taskListId,
       taskId,
       updates
@@ -272,7 +272,7 @@ async function deleteTask(req, res) {
 
     console.log(`🗑️  Deleting task ${taskId} from list ${taskListId}`);
 
-    await tasksService.deleteTask(req.user.googleSub, taskListId, taskId);
+    await tasksService.deleteTask(req.user.microsoftId, taskListId, taskId);
 
     res.json({
       success: true,
