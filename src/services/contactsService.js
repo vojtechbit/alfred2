@@ -1,457 +1,323 @@
-import { google } from 'googleapis';
-import { refreshAccessToken } from '../config/oauth.js';
+import { Client } from '@microsoft/microsoft-graph-client';
+import 'isomorphic-fetch';
+import { refreshAccessToken } from '../config/microsoft.js';
 import dotenv from 'dotenv';
 import { wrapModuleFunctions } from '../utils/advancedDebugging.js';
 import { mapGoogleApiError } from './serviceErrors.js';
+import XLSX from 'xlsx-js-style';
 
 dotenv.config();
 
 /**
- * Contacts Service - Google Sheets Storage
- * 
- * ✅ SHEETS ONLY - NO MONGODB
- * All contact data is stored in Google Sheets.
+ * Contacts Service - Excel Online Storage
+ *
+ * ✅ EXCEL ONLY - NO MONGODB
+ * All contact data is stored in Excel file in OneDrive.
  * Authentication tokens are passed from caller (controller/RPC).
- * 
+ *
+ * Replaces Google Sheets with Microsoft Excel Online
  * STRUCTURE: Name | Email | Phone | RealEstate | Notes
  */
 
-const CONTACTS_SHEET_NAME = 'Alfred Kontakty';
-const CONTACTS_RANGE = 'A2:E';
+const CONTACTS_FILE_NAME = 'Alfred Kontakty.xlsx';
+const CONTACTS_WORKSHEET_NAME = 'Contacts';
+const CONTACTS_RANGE = 'A2:E10000'; // Data rows (excluding header)
+const CONTACTS_HEADER_RANGE = 'A1:E1';
 const CONTACTS_EXPECTED_HEADERS = ['Name', 'Email', 'Phone', 'RealEstate', 'Notes'];
 const GPT_RETRY_EXAMPLE_EMAIL = 'alex@example.com';
 
 /**
- * Get authenticated Sheets API client
+ * Get authenticated Microsoft Graph client
  */
-async function getSheetsClient(accessToken) {
+async function getGraphClient(accessToken) {
   try {
-    const { OAuth2 } = google.auth;
-    const client = new OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.REDIRECT_URI
-    );
-    
-    client.setCredentials({ access_token: accessToken });
-    return google.sheets({ version: 'v4', auth: client });
-
+    return Client.init({
+      authProvider: (done) => {
+        done(null, accessToken);
+      }
+    });
   } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to get Sheets client');
+    console.error('❌ [GRAPH_ERROR] Failed to get Graph client');
     throw mapGoogleApiError(error, {
-      message: 'Failed to get Sheets client - check Google API credentials and scopes',
-      details: { operation: 'getSheetsClient' }
+      message: 'Failed to get Graph client - check Microsoft API credentials and scopes',
+      details: { operation: 'getGraphClient' }
     });
   }
 }
 
 /**
- * Get authenticated Drive API client
+ * Find contacts Excel file by name
  */
-async function getDriveClient(accessToken) {
+async function findContactsFile(accessToken) {
   try {
-    const { OAuth2 } = google.auth;
-    const client = new OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.REDIRECT_URI
+    const client = await getGraphClient(accessToken);
+
+    // Search for the file in user's OneDrive
+    const response = await client.api('/me/drive/root/search')
+      .query({
+        q: CONTACTS_FILE_NAME
+      })
+      .get();
+
+    const files = response.value || [];
+    const contactsFile = files.find(f =>
+      f.name === CONTACTS_FILE_NAME &&
+      !f.deleted &&
+      (f.file?.mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+       f.package?.type === 'oneNote')
     );
-    
-    client.setCredentials({ access_token: accessToken });
-    return google.drive({ version: 'v3', auth: client });
+
+    return contactsFile?.id || null;
 
   } catch (error) {
-    console.error('❌ [DRIVE_ERROR] Failed to get Drive client');
+    console.error('❌ [DRIVE_ERROR] Failed to find contacts file');
     throw mapGoogleApiError(error, {
-      message: 'Failed to get Drive client - check Google API credentials and scopes',
-      details: { operation: 'getDriveClient' }
-    });
-  }
-}
-
-/**
- * Find contacts sheet by name
- */
-async function findContactsSheet(accessToken) {
-  try {
-    const drive = await getDriveClient(accessToken);
-
-    const response = await drive.files.list({
-      q: `name='${CONTACTS_SHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
-      fields: 'files(id, name)',
-      spaces: 'drive'
-    });
-
-    return response.data.files?.[0]?.id || null;
-
-  } catch (error) {
-    console.error('❌ [DRIVE_ERROR] Failed to find contacts sheet');
-    throw mapGoogleApiError(error, {
-      message: 'Failed to find contacts sheet in Google Drive. You may need to re-authorize to grant Drive access.',
+      message: 'Failed to find contacts file in OneDrive. You may need to re-authorize to grant OneDrive access.',
       details: {
-        operation: 'findContactsSheet',
-        sheetName: CONTACTS_SHEET_NAME,
-        hint: 'This error often occurs when the access token lacks Drive API scopes. User needs to re-authenticate.'
+        operation: 'findContactsFile',
+        fileName: CONTACTS_FILE_NAME,
+        hint: 'This error often occurs when the access token lacks Files.ReadWrite scopes. User needs to re-authenticate.'
       }
     });
   }
 }
 
 /**
- * Create a new contacts sheet with proper headers
+ * Create contacts Excel file with headers
  */
-async function createContactsSheet(accessToken) {
+async function createContactsFile(accessToken) {
   try {
-    const sheets = await getSheetsClient(accessToken);
+    console.log(`📝 Creating new contacts file: ${CONTACTS_FILE_NAME}`);
 
-    const createResponse = await sheets.spreadsheets.create({
-      requestBody: {
-        properties: { title: CONTACTS_SHEET_NAME },
-        sheets: [{
-          properties: {
-            title: 'Sheet1',
-            gridProperties: { rowCount: 10000, columnCount: 5 }
-          }
-        }]
-      }
-    });
+    const client = await getGraphClient(accessToken);
 
-    const spreadsheetId = createResponse.data.spreadsheetId;
-    const primarySheet = createResponse.data.sheets?.[0]?.properties || {};
-    const sheetId = primarySheet.sheetId;
+    // Create workbook with headers
+    const workbook = XLSX.utils.book_new();
+    const headers = [CONTACTS_EXPECTED_HEADERS];
+    const worksheet = XLSX.utils.aoa_to_sheet(headers);
+    XLSX.utils.book_append_sheet(workbook, worksheet, CONTACTS_WORKSHEET_NAME);
 
-    // Add header row
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: 'A1:E1',
-      valueInputOption: 'RAW',
-      requestBody: { values: [CONTACTS_EXPECTED_HEADERS] }
-    });
+    // Convert to buffer
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 
-    // Make header bold
-    if (typeof sheetId === 'number') {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [{
-            repeatCell: {
-              range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
-              cell: { userEnteredFormat: { textFormat: { bold: true } } },
-              fields: 'userEnteredFormat.textFormat.bold'
-            }
-          }]
-        }
-      });
-    }
+    // Upload to OneDrive
+    const uploadResponse = await client.api(`/me/drive/root:/${CONTACTS_FILE_NAME}:/content`)
+      .put(buffer);
 
-    console.log(`✅ Contact sheet created: ${spreadsheetId}`);
-    return { spreadsheetId, sheetId, sheetTitle: primarySheet.title };
+    console.log(`✅ Contacts file created successfully: ${uploadResponse.id}`);
+
+    return uploadResponse.id;
 
   } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to create contacts sheet');
+    console.error('❌ Failed to create contacts file');
     throw mapGoogleApiError(error, {
-      message: 'Failed to create contacts sheet. You may need to re-authorize to grant Sheets access.',
+      message: 'Failed to create contacts Excel file in OneDrive',
       details: {
-        operation: 'createContactsSheet',
-        sheetName: CONTACTS_SHEET_NAME
+        operation: 'createContactsFile',
+        fileName: CONTACTS_FILE_NAME
       }
     });
   }
 }
 
 /**
- * Get or create contacts sheet
+ * Get or create contacts file
  */
-async function getOrCreateContactsSheet(accessToken) {
-  let spreadsheetId = await findContactsSheet(accessToken);
-  if (!spreadsheetId) {
-    const created = await createContactsSheet(accessToken);
-    spreadsheetId = created.spreadsheetId;
-  }
-  return spreadsheetId;
-}
+async function getOrCreateContactsFile(accessToken) {
+  try {
+    let fileId = await findContactsFile(accessToken);
 
-function stripDiacritics(str) {
-  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
-function normalizeHeaderValue(value) {
-  return String(value ?? '').trim().toLowerCase();
-}
-
-function isContactsHeaderRow(row) {
-  if (!Array.isArray(row)) return false;
-  if (row.length < 2) return false;
-  const normalized = row.map(normalizeHeaderValue);
-  return normalized[0] === 'name' && normalized[1] === 'email';
-}
-
-function quoteSheetTitleForRange(title) {
-  const safeTitle = String(title ?? '').replace(/'/g, "''");
-  return `'${safeTitle}'`;
-}
-
-async function getContactsSheetInfo(accessToken) {
-  const sheets = await getSheetsClient(accessToken);
-  const spreadsheetId = await getOrCreateContactsSheet(accessToken);
-
-  const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: 'sheets(properties(sheetId,title,index))'
-  });
-
-  const sheetsMeta = spreadsheet.data.sheets || [];
-  if (sheetsMeta.length === 0) {
-    throw buildContactsSheetMismatchError(
-      new Error('Contacts spreadsheet is missing worksheets'),
-      { reason: 'NO_WORKSHEETS', spreadsheetId, operation: 'contacts.resolveSheet' }
-    );
-  }
-
-  const ranges = sheetsMeta.map(sheet => `${quoteSheetTitleForRange(sheet.properties?.title ?? '')}!A1:E1`);
-  const headerRows = new Map();
-
-  if (ranges.length > 0) {
-    const headerResponse = await sheets.spreadsheets.values.batchGet({
-      spreadsheetId,
-      ranges
-    });
-
-    const valueRanges = headerResponse.data?.valueRanges || [];
-    valueRanges.forEach((range, index) => {
-      if (!headerRows.has(index)) {
-        headerRows.set(index, range.values?.[0] || null);
-      }
-    });
-  }
-
-  let matchedIndex = -1;
-  for (let i = 0; i < sheetsMeta.length; i++) {
-    const headerRow = headerRows.get(i);
-    if (headerRow && isContactsHeaderRow(headerRow)) {
-      matchedIndex = i;
-      break;
+    if (!fileId) {
+      console.log(`⚠️  Contacts file not found, creating new one...`);
+      fileId = await createContactsFile(accessToken);
     }
+
+    return fileId;
+
+  } catch (error) {
+    console.error('❌ Failed to get or create contacts file');
+    throw error;
   }
-
-  if (matchedIndex === -1) {
-    matchedIndex = sheetsMeta.findIndex(sheet => sheet.properties?.index === 0);
-  }
-
-  if (matchedIndex === -1) matchedIndex = 0;
-
-  const matchedSheet = sheetsMeta[matchedIndex];
-  const detectedHeaders = headerRows.get(matchedIndex) || null;
-
-  return {
-    spreadsheetId,
-    sheetId: matchedSheet.properties?.sheetId,
-    sheetTitle: matchedSheet.properties?.title,
-    detectedHeaders
-  };
-}
-
-function isMissingGridError(error) {
-  if (!error) return false;
-  const directMessage = typeof error.message === 'string' ? error.message : '';
-  if (directMessage.includes('No grid with id')) return true;
-
-  const errorList = Array.isArray(error.errors) ? error.errors : [];
-  if (errorList.some(item => typeof item?.message === 'string' && item.message.includes('No grid with id'))) {
-    return true;
-  }
-
-  const responseMessage = error.response?.data?.error?.message;
-  if (typeof responseMessage === 'string' && responseMessage.includes('No grid with id')) {
-    return true;
-  }
-
-  const rootMessage = error.response?.data?.message;
-  if (typeof rootMessage === 'string' && rootMessage.includes('No grid with id')) {
-    return true;
-  }
-
-  return false;
-}
-
-function buildContactsSheetMismatchError(originalError, context = {}) {
-  const error = new Error('Contacts worksheet is missing or does not match the expected structure');
-  error.name = 'ContactsSheetMismatchError';
-  error.statusCode = context.statusCode || 409;
-  error.code = 'CONTACTS_SHEET_MISMATCH';
-
-  const details = {
-    reason: context.reason || 'TARGET_WORKSHEET_MISSING',
-    spreadsheetId: context.spreadsheetId,
-    attemptedSheetId: context.sheetId,
-    sheetTitle: context.sheetTitle,
-    expectedHeaders: CONTACTS_EXPECTED_HEADERS,
-    suggestedNextSteps: [
-      {
-        type: 'retry',
-        description: 'Retry the delete operation with a verified contact email address.',
-        request: { op: context.retryOp || 'contactsDelete', body: { email: GPT_RETRY_EXAMPLE_EMAIL } }
-      },
-      {
-        type: 'fallback',
-        description: 'Run the contacts dedupe macro to merge duplicate rows before retrying delete.',
-        request: { op: 'dedupe' }
-      }
-    ],
-    originalError: originalError?.message || String(originalError)
-  };
-
-  if (context.operation) {
-    details.operation = context.operation;
-  }
-
-  if (context.detectedHeaders && Array.isArray(context.detectedHeaders)) {
-    details.detectedHeaders = context.detectedHeaders;
-  }
-
-  error.details = details;
-  error.cause = originalError;
-  return error;
-}
-
-function jaroWinkler(s1, s2) {
-  const m1 = s1.length;
-  const m2 = s2.length;
-  
-  if (m1 === 0 && m2 === 0) return 1.0;
-  if (m1 === 0 || m2 === 0) return 0.0;
-  
-  const matchDistance = Math.floor(Math.max(m1, m2) / 2) - 1;
-  const s1Matches = new Array(m1).fill(false);
-  const s2Matches = new Array(m2).fill(false);
-  
-  let matches = 0, transpositions = 0;
-  
-  for (let i = 0; i < m1; i++) {
-    const start = Math.max(0, i - matchDistance);
-    const end = Math.min(i + matchDistance + 1, m2);
-    
-    for (let j = start; j < end; j++) {
-      if (s2Matches[j] || s1[i] !== s2[j]) continue;
-      s1Matches[i] = true;
-      s2Matches[j] = true;
-      matches++;
-      break;
-    }
-  }
-  
-  if (matches === 0) return 0.0;
-  
-  let k = 0;
-  for (let i = 0; i < m1; i++) {
-    if (!s1Matches[i]) continue;
-    while (!s2Matches[k]) k++;
-    if (s1[i] !== s2[k]) transpositions++;
-    k++;
-  }
-  
-  const jaro = (matches / m1 + matches / m2 + (matches - transpositions / 2) / matches) / 3.0;
-  
-  let prefix = 0;
-  for (let i = 0; i < Math.min(4, Math.min(m1, m2)); i++) {
-    if (s1[i] === s2[i]) prefix++;
-    else break;
-  }
-  
-  return jaro + prefix * 0.1 * (1 - jaro);
 }
 
 /**
- * Search contacts in Google Sheet
+ * Get contacts file info (for debugging)
+ */
+async function getContactsFileInfo(accessToken) {
+  try {
+    const client = await getGraphClient(accessToken);
+    const fileId = await getOrCreateContactsFile(accessToken);
+
+    // Get workbook info
+    const workbookResponse = await client.api(`/me/drive/items/${fileId}/workbook`)
+      .get();
+
+    // Get worksheets
+    const worksheetsResponse = await client.api(`/me/drive/items/${fileId}/workbook/worksheets`)
+      .get();
+
+    const worksheets = worksheetsResponse.value || [];
+    const contactsSheet = worksheets.find(ws => ws.name === CONTACTS_WORKSHEET_NAME);
+
+    if (!contactsSheet) {
+      throw new Error(`Worksheet "${CONTACTS_WORKSHEET_NAME}" not found in contacts file`);
+    }
+
+    // Get used range to count rows
+    const usedRangeResponse = await client.api(
+      `/me/drive/items/${fileId}/workbook/worksheets/${contactsSheet.id}/usedRange`
+    ).get();
+
+    const rowCount = (usedRangeResponse.rowCount || 1) - 1; // Subtract header row
+
+    return {
+      fileId,
+      fileName: CONTACTS_FILE_NAME,
+      worksheetId: contactsSheet.id,
+      worksheetName: contactsSheet.name,
+      rowCount,
+      lastModified: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to get contacts file info');
+    throw mapGoogleApiError(error, {
+      message: 'Failed to get contacts file info',
+      details: { operation: 'getContactsFileInfo' }
+    });
+  }
+}
+
+/**
+ * Read all contacts from Excel file
+ */
+async function readAllContacts(accessToken) {
+  try {
+    const client = await getGraphClient(accessToken);
+    const fileId = await getOrCreateContactsFile(accessToken);
+
+    // Get the worksheet
+    const worksheetsResponse = await client.api(`/me/drive/items/${fileId}/workbook/worksheets`)
+      .get();
+
+    const contactsSheet = (worksheetsResponse.value || []).find(
+      ws => ws.name === CONTACTS_WORKSHEET_NAME
+    );
+
+    if (!contactsSheet) {
+      throw new Error(`Worksheet "${CONTACTS_WORKSHEET_NAME}" not found`);
+    }
+
+    // Read used range (excluding header)
+    const rangeResponse = await client.api(
+      `/me/drive/items/${fileId}/workbook/worksheets/${contactsSheet.id}/usedRange`
+    ).get();
+
+    const values = rangeResponse.values || [];
+
+    // Skip header row and map to contact objects
+    const contacts = [];
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      if (row && row.length > 0 && (row[0] || row[1])) { // At least name or email
+        contacts.push({
+          name: row[0] || '',
+          email: row[1] || '',
+          phone: row[2] || '',
+          realestate: row[3] || '',
+          notes: row[4] || '',
+          rowIndex: i + 1 // Excel row number (1-based, accounting for header)
+        });
+      }
+    }
+
+    return contacts;
+
+  } catch (error) {
+    console.error('❌ Failed to read contacts');
+    throw mapGoogleApiError(error, {
+      message: 'Failed to read contacts from Excel file',
+      details: { operation: 'readAllContacts' }
+    });
+  }
+}
+
+/**
+ * Search contacts by query
  */
 async function searchContacts(accessToken, searchQuery) {
   try {
-    const sheets = await getSheetsClient(accessToken);
-    const spreadsheetId = await getOrCreateContactsSheet(accessToken);
+    if (!searchQuery || searchQuery.trim() === '') {
+      return [];
+    }
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
+    const allContacts = await readAllContacts(accessToken);
+    const query = searchQuery.toLowerCase().trim();
+
+    // Search across all fields
+    const results = allContacts.filter(contact => {
+      return (
+        (contact.name && contact.name.toLowerCase().includes(query)) ||
+        (contact.email && contact.email.toLowerCase().includes(query)) ||
+        (contact.phone && contact.phone.toLowerCase().includes(query)) ||
+        (contact.realestate && contact.realestate.toLowerCase().includes(query)) ||
+        (contact.notes && contact.notes.toLowerCase().includes(query))
+      );
     });
 
-    const rows = response.data.values || [];
-    if (rows.length === 0) return { contacts: [], spreadsheetId };
+    console.log(`🔍 Found ${results.length} contacts matching "${searchQuery}"`);
 
-    const query = searchQuery.toLowerCase();
-    const contacts = rows
-      .filter(row => {
-        const name = (row[0] || '').toLowerCase();
-        const email = (row[1] || '').toLowerCase();
-        const phone = (row[2] || '').toLowerCase();
-        const realEstate = (row[3] || '').toLowerCase();
-        const notes = (row[4] || '').toLowerCase();
-        return name.includes(query) || email.includes(query) ||
-               phone.includes(query) || realEstate.includes(query) ||
-               notes.includes(query);
-      })
-      .map(row => ({
-        name: row[0] || '',
-        email: row[1] || '',
-        phone: row[2] || '',
-        realEstate: row[3] || '',
-        notes: row[4] || ''
-      }));
-
-    return { contacts, spreadsheetId };
+    return results.map(contact => ({
+      name: contact.name,
+      email: contact.email,
+      phone: contact.phone,
+      realestate: contact.realestate,
+      notes: contact.notes
+    }));
 
   } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to search contacts');
+    console.error('❌ Failed to search contacts');
     throw mapGoogleApiError(error, {
-      message: 'Failed to search contacts. You may need to re-authorize.',
+      message: 'Failed to search contacts',
       details: { operation: 'searchContacts', query: searchQuery }
     });
   }
 }
 
 /**
- * Get address suggestions
+ * Get address suggestions for autocomplete
  */
 async function getAddressSuggestions(accessToken, query) {
   try {
-    const sheets = await getSheetsClient(accessToken);
-    const spreadsheetId = await getOrCreateContactsSheet(accessToken);
+    if (!query || query.trim() === '') {
+      return [];
+    }
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
+    const allContacts = await readAllContacts(accessToken);
+    const searchTerm = query.toLowerCase().trim();
+
+    // Search by name or email, return email addresses
+    const matches = allContacts.filter(contact => {
+      const name = (contact.name || '').toLowerCase();
+      const email = (contact.email || '').toLowerCase();
+      return name.includes(searchTerm) || email.includes(searchTerm);
     });
 
-    const rows = response.data.values || [];
-    if (rows.length === 0 || !query) return [];
+    // Return unique email addresses
+    const suggestions = [...new Set(
+      matches
+        .map(c => c.email)
+        .filter(Boolean)
+    )];
 
-    const normalizedQuery = stripDiacritics(query.toLowerCase().trim());
-    const tokens = normalizedQuery.split(/\s+/).filter(t => t.length > 0);
-    if (tokens.length === 0) return [];
+    console.log(`💡 Found ${suggestions.length} address suggestions for "${query}"`);
 
-    const scored = rows.map(row => {
-      const realEstate = row[3] || '';
-      if (!realEstate) return { realEstate, score: 0 };
-
-      const normalizedAddress = stripDiacritics(realEstate.toLowerCase());
-      let tokenScore = 0;
-      for (const token of tokens) {
-        if (normalizedAddress.includes(token)) tokenScore += 2;
-      }
-
-      const addressSim = jaroWinkler(normalizedQuery, normalizedAddress);
-      return { realEstate, score: tokenScore + addressSim * 10 };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored
-      .filter(c => c.score > 0)
-      .slice(0, 3)
-      .map(c => ({ realEstate: c.realEstate, score: Math.round(c.score * 100) / 100 }));
+    return suggestions;
 
   } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to get address suggestions');
+    console.error('❌ Failed to get address suggestions');
     throw mapGoogleApiError(error, {
-      message: 'Failed to get address suggestions. You may need to re-authorize.',
+      message: 'Failed to get address suggestions',
       details: { operation: 'getAddressSuggestions', query }
     });
   }
@@ -462,531 +328,305 @@ async function getAddressSuggestions(accessToken, query) {
  */
 async function listAllContacts(accessToken) {
   try {
-    const sheets = await getSheetsClient(accessToken);
-    const spreadsheetId = await getOrCreateContactsSheet(accessToken);
+    const allContacts = await readAllContacts(accessToken);
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
-    });
+    console.log(`📋 Retrieved ${allContacts.length} contacts`);
 
-    const rows = response.data.values || [];
-    const contacts = rows.map((row, index) => ({
-      rowIndex: index + 2,
-      name: row[0] || '',
-      email: row[1] || '',
-      phone: row[2] || '',
-      realEstate: row[3] || '',
-      notes: row[4] || ''
+    return allContacts.map(contact => ({
+      name: contact.name,
+      email: contact.email,
+      phone: contact.phone,
+      realestate: contact.realestate,
+      notes: contact.notes
     }));
 
-    return { contacts, spreadsheetId };
-
   } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to list contacts');
+    console.error('❌ Failed to list contacts');
     throw mapGoogleApiError(error, {
-      message: 'Failed to list contacts. You may need to re-authorize to grant access to Google Sheets and Drive.',
-      details: {
-        operation: 'listAllContacts',
-        hint: 'This error typically occurs when your access token lacks the necessary scopes (Drive/Sheets). Please re-authenticate.'
-      }
+      message: 'Failed to list all contacts',
+      details: { operation: 'listAllContacts' }
     });
   }
 }
 
 /**
- * Add contact to Sheets
+ * Add single contact
  */
 async function addContact(accessToken, contactData) {
   try {
-    const sheets = await getSheetsClient(accessToken);
-    const spreadsheetId = await getOrCreateContactsSheet(accessToken);
-    const { name, email, notes, realEstate, phone } = contactData;
+    const client = await getGraphClient(accessToken);
+    const fileId = await getOrCreateContactsFile(accessToken);
 
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
-    });
+    const worksheetsResponse = await client.api(`/me/drive/items/${fileId}/workbook/worksheets`)
+      .get();
 
-    const rows = response.data.values || [];
-    const duplicates = rows
-      .map((row, index) => ({ row, index }))
-      .filter(({ row }) => (row[1] || '').toLowerCase().trim() === email.toLowerCase().trim())
-      .map(({ row, index }) => ({
-        rowIndex: index + 2,
-        name: row[0] || '',
-        email: row[1] || '',
-        phone: row[2] || '',
-        realEstate: row[3] || '',
-        notes: row[4] || ''
-      }));
+    const contactsSheet = (worksheetsResponse.value || []).find(
+      ws => ws.name === CONTACTS_WORKSHEET_NAME
+    );
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: 'A:E',
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: [[name, email, phone || '', realEstate || '', notes || '']]
-      }
-    });
-
-    const result = { name, email, phone: phone || '', realEstate: realEstate || '', notes: notes || '', spreadsheetId };
-    if (duplicates.length > 0) result.duplicates = duplicates;
-    return result;
-
-  } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to add contact');
-    throw mapGoogleApiError(error, {
-      message: 'Failed to add contact. You may need to re-authorize.',
-      details: { operation: 'addContact', email: contactData.email }
-    });
-  }
-}
-
-/**
- * Bulk upsert contacts
- */
-async function bulkUpsert(accessToken, contacts) {
-  try {
-    const sheets = await getSheetsClient(accessToken);
-    const spreadsheetId = await getOrCreateContactsSheet(accessToken);
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
-    });
-
-    const existingRows = response.data.values || [];
-    const existingEmails = new Map();
-    
-    existingRows.forEach((row, index) => {
-      const email = (row[1] || '').toLowerCase().trim();
-      if (email) {
-        if (!existingEmails.has(email)) existingEmails.set(email, []);
-        existingEmails.get(email).push({
-          rowIndex: index + 2,
-          name: row[0] || '',
-          email: row[1] || '',
-          phone: row[2] || '',
-          realEstate: row[3] || '',
-          notes: row[4] || ''
-        });
-      }
-    });
-
-    const newRows = contacts.map(c => [
-      c.name || '',
-      c.email || '',
-      c.phone || '',
-      c.realEstate || '',
-      c.notes || ''
-    ]);
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId,
-      range: 'A:E',
-      valueInputOption: 'RAW',
-      requestBody: { values: newRows }
-    });
-
-    const duplicates = contacts
-      .filter(contact => existingEmails.has((contact.email || '').toLowerCase().trim()))
-      .map(contact => ({
-        email: contact.email,
-        newContact: contact,
-        existing: existingEmails.get((contact.email || '').toLowerCase().trim())
-      }));
-
-    return {
-      inserted: contacts.length,
-      duplicates: duplicates.length > 0 ? duplicates : undefined,
-      spreadsheetId
-    };
-
-  } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to bulk upsert contacts');
-    throw mapGoogleApiError(error, {
-      message: 'Failed to bulk upsert contacts. You may need to re-authorize.',
-      details: { operation: 'bulkUpsert', count: contacts.length }
-    });
-  }
-}
-
-/**
- * Bulk delete contacts (by emails or rowIds)
- */
-async function bulkDelete(accessToken, { emails, rowIds }) {
-  let sheetInfo;
-  try {
-    const sheets = await getSheetsClient(accessToken);
-    sheetInfo = await getContactsSheetInfo(accessToken);
-    const { spreadsheetId, sheetId, sheetTitle, detectedHeaders } = sheetInfo;
-
-    if (typeof sheetId !== 'number') {
-      throw buildContactsSheetMismatchError(new Error('Missing sheet identifier'), {
-        reason: 'MISSING_SHEET_ID',
-        spreadsheetId,
-        sheetId,
-        sheetTitle,
-        detectedHeaders,
-        operation: 'contacts.bulkDelete'
-      });
+    if (!contactsSheet) {
+      throw new Error(`Worksheet "${CONTACTS_WORKSHEET_NAME}" not found`);
     }
 
-    let rowsToDelete = [];
+    // Get current used range to find next empty row
+    const usedRangeResponse = await client.api(
+      `/me/drive/items/${fileId}/workbook/worksheets/${contactsSheet.id}/usedRange`
+    ).get();
 
-    if (emails && emails.length > 0) {
-      const response = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: CONTACTS_RANGE,
-      });
+    const nextRow = (usedRangeResponse.rowCount || 1) + 1;
 
-      const rows = response.data.values || [];
-      const emailSet = new Set(emails.map(e => e.toLowerCase().trim()));
+    // Prepare row data
+    const rowData = [
+      contactData.name || '',
+      contactData.email || '',
+      contactData.phone || '',
+      contactData.realestate || '',
+      contactData.notes || ''
+    ];
 
-      rows.forEach((row, index) => {
-        const rowEmail = (row[1] || '').toLowerCase().trim();
-        if (emailSet.has(rowEmail)) rowsToDelete.push(index + 2);
-      });
-    } else if (rowIds && rowIds.length > 0) {
-      rowsToDelete = rowIds;
-    }
-
-    if (rowsToDelete.length === 0) {
-      return {
-        deleted: 0,
-        spreadsheetId,
-        skipped: {
-          reason: 'NO_MATCHING_ROWS',
-          attemptedEmails: Array.isArray(emails) ? emails : undefined,
-          attemptedRowIds: Array.isArray(rowIds) ? rowIds : undefined,
-          suggestedNextSteps: [
-            {
-              type: 'search',
-              description: 'Search contacts first to confirm the stored email or row before retrying bulk delete.',
-              request: { op: 'contactsSearch', query: 'alex' }
-            },
-            {
-              type: 'fallback',
-              description: 'Fallback to dedupe to merge duplicates before deleting.',
-              request: { op: 'dedupe' }
-            }
-          ]
-        }
-      };
-    }
-
-    console.log(`📊 Deleting rows: ${rowsToDelete.join(', ')}`);
-    rowsToDelete.sort((a, b) => b - a);
-
-    const requests = rowsToDelete.map(rowIndex => ({
-      deleteDimension: {
-        range: {
-          sheetId,
-          dimension: 'ROWS',
-          startIndex: rowIndex - 1,
-          endIndex: rowIndex
-        }
-      }
-    }));
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: { requests }
+    // Append row
+    const rangeAddress = `A${nextRow}:E${nextRow}`;
+    await client.api(
+      `/me/drive/items/${fileId}/workbook/worksheets/${contactsSheet.id}/range(address='${rangeAddress}')`
+    ).patch({
+      values: [rowData]
     });
 
-    return { deleted: rowsToDelete.length, spreadsheetId };
-
-  } catch (error) {
-    if (error.code === 'CONTACTS_SHEET_MISMATCH') {
-      throw error;
-    }
-    if (isMissingGridError(error)) {
-      console.error('❌ [SHEETS_ERROR] Contacts worksheet mismatch during bulk delete');
-      throw buildContactsSheetMismatchError(error, {
-        operation: 'contacts.bulkDelete',
-        spreadsheetId: sheetInfo?.spreadsheetId,
-        sheetId: sheetInfo?.sheetId,
-        sheetTitle: sheetInfo?.sheetTitle,
-        detectedHeaders: sheetInfo?.detectedHeaders
-      });
-    }
-    console.error('❌ [SHEETS_ERROR] Failed to bulk delete contacts');
-    throw mapGoogleApiError(error, {
-      message: 'Failed to bulk delete contacts. You may need to re-authorize.',
-      details: { operation: 'bulkDelete', emails, rowIds }
-    });
-  }
-}
-
-/**
- * Update contact
- */
-async function updateContact(accessToken, contactData) {
-  try {
-    const sheets = await getSheetsClient(accessToken);
-    const spreadsheetId = await getOrCreateContactsSheet(accessToken);
-    const {
-      name,
-      email,
-      notes,
-      realEstate,
-      phone,
-      rowIndex: explicitRowIndex
-    } = contactData;
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
-    });
-
-    const rows = response.data.values || [];
-    let rowIndex = typeof explicitRowIndex === 'number' ? explicitRowIndex : -1;
-
-    if (rowIndex === -1) {
-      for (let i = 0; i < rows.length; i++) {
-        if (
-          (rows[i][0] || '').toLowerCase() === (name || '').toLowerCase() &&
-          (rows[i][1] || '').toLowerCase() === (email || '').toLowerCase()
-        ) {
-          rowIndex = i + 2;
-          break;
-        }
-      }
-    }
-
-    if (rowIndex === -1) {
-      return await addContact(accessToken, contactData);
-    }
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `A${rowIndex}:E${rowIndex}`,
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: [[name, email, phone || '', realEstate || '', notes || '']]
-      }
-    });
-
-    return { name, email, phone: phone || '', realEstate: realEstate || '', notes: notes || '', spreadsheetId };
-
-  } catch (error) {
-    console.error('❌ [SHEETS_ERROR] Failed to update contact');
-    throw mapGoogleApiError(error, {
-      message: 'Failed to update contact. You may need to re-authorize.',
-      details: { operation: 'updateContact', email: contactData.email }
-    });
-  }
-}
-
-/**
- * Delete contact by email OR by name
- * - If email provided: delete by email
- * - If only name provided: find contact with that name and delete it
- * - If both: delete exact match (email + name)
- */
-async function deleteContact(accessToken, { email, name }) {
-  let sheetInfo;
-  try {
-    if (!email && !name) {
-      const error = new Error('Must provide either email or name');
-      error.statusCode = 400;
-      error.code = 'INVALID_IDENTIFIER';
-      error.details = {
-        required: ['email', 'name'],
-        suggestedNextSteps: [
-          {
-            type: 'retry',
-            description: 'Retry with a contact email that exists in the Google Sheet.',
-            request: { op: 'contactsDelete', body: { email: GPT_RETRY_EXAMPLE_EMAIL } }
-          }
-        ]
-      };
-      throw error;
-    }
-
-    const sheets = await getSheetsClient(accessToken);
-    sheetInfo = await getContactsSheetInfo(accessToken);
-    const { spreadsheetId, sheetId, sheetTitle, detectedHeaders } = sheetInfo;
-
-    if (typeof sheetId !== 'number') {
-      throw buildContactsSheetMismatchError(new Error('Missing sheet identifier'), {
-        reason: 'MISSING_SHEET_ID',
-        spreadsheetId,
-        sheetId,
-        sheetTitle,
-        detectedHeaders,
-        operation: 'contacts.deleteContact'
-      });
-    }
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
-    });
-
-    const rows = response.data.values || [];
-    let rowIndex = -1;
-    let deletedContact = null;
-
-    if (email) {
-      // EMAIL MODE: Find by email (with optional name confirmation)
-      for (let i = 0; i < rows.length; i++) {
-        const rowEmail = (rows[i][1] || '').toLowerCase().trim();
-        const rowName = (rows[i][0] || '').toLowerCase().trim();
-        
-        if (rowEmail === email.toLowerCase().trim()) {
-          // If name also provided, must match both
-          if (name && rowName !== name.toLowerCase().trim()) {
-            continue;
-          }
-          rowIndex = i + 2;
-          deletedContact = {
-            name: rows[i][0] || '',
-            email: rows[i][1] || '',
-            phone: rows[i][2] || '',
-            realEstate: rows[i][3] || '',
-            notes: rows[i][4] || ''
-          };
-          break;
-        }
-      }
-    } else {
-      // NAME ONLY MODE: Find by name
-      const nameToFind = name.toLowerCase().trim();
-      const matches = [];
-      const searchHint = (name || '').trim().slice(0, 3) || 'alex';
-
-      for (let i = 0; i < rows.length; i++) {
-        const rowName = (rows[i][0] || '').toLowerCase().trim();
-        if (rowName === nameToFind) {
-          matches.push({
-            rowIndex: i + 2,
-            contact: {
-              name: rows[i][0] || '',
-              email: rows[i][1] || '',
-              phone: rows[i][2] || '',
-              realEstate: rows[i][3] || '',
-              notes: rows[i][4] || ''
-            }
-          });
-        }
-      }
-
-      if (matches.length === 0) {
-        const error = new Error(`Contact not found: ${name}`);
-        error.code = 'CONTACT_NOT_FOUND';
-        error.statusCode = 404;
-        error.details = {
-          attemptedIdentifiers: { name },
-          suggestedNextSteps: [
-            {
-              type: 'search',
-              description: 'Search contacts to find the matching email before deleting.',
-              request: { op: 'contactsSearch', query: searchHint }
-            },
-            {
-              type: 'retry',
-              description: 'Retry delete with the exact email returned by the search.',
-              request: { op: 'contactsDelete', body: { email: GPT_RETRY_EXAMPLE_EMAIL } }
-            }
-          ]
-        };
-        throw error;
-      }
-
-      if (matches.length > 1) {
-        // Multiple matches - cannot delete ambiguously
-        const error = new Error(`Found ${matches.length} contacts with name "${name}". Please provide email to disambiguate.`);
-        error.code = 'AMBIGUOUS_DELETE';
-        error.statusCode = 409;
-        error.candidates = matches.map(m => m.contact);
-        error.details = {
-          candidates: matches.map(m => m.contact),
-          suggestedNextSteps: [
-            {
-              type: 'retry',
-              description: 'Retry delete using the precise email of the desired contact.',
-              request: { op: 'contactsDelete', body: { email: GPT_RETRY_EXAMPLE_EMAIL } }
-            }
-          ]
-        };
-        throw error;
-      }
-      
-      // Single match - use it
-      rowIndex = matches[0].rowIndex;
-      deletedContact = matches[0].contact;
-    }
-
-    if (rowIndex === -1) {
-      const error = new Error(`Contact not found: ${name ? `${name} (${email})` : email}`);
-      error.code = 'CONTACT_NOT_FOUND';
-      error.statusCode = 404;
-      error.details = {
-        attemptedIdentifiers: {
-          email: email || null,
-          name: name || null
-        },
-        suggestedNextSteps: [
-          {
-            type: 'search',
-            description: 'Search contacts to confirm the exact stored email before retrying delete.',
-            request: { op: 'contactsSearch', query: 'alex' }
-          },
-          {
-            type: 'retry',
-            description: 'Retry delete with the confirmed email value.',
-            request: { op: 'contactsDelete', body: { email: GPT_RETRY_EXAMPLE_EMAIL } }
-          }
-        ]
-      };
-      throw error;
-    }
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [{
-          deleteDimension: {
-            range: {
-              sheetId,
-              dimension: 'ROWS',
-              startIndex: rowIndex - 1,
-              endIndex: rowIndex
-            }
-          }
-        }]
-      }
-    });
+    console.log(`✅ Contact added: ${contactData.name} (${contactData.email})`);
 
     return {
       success: true,
-      deleted: deletedContact,
-      deletedRowIndex: rowIndex,
-      sheet: { spreadsheetId, sheetId }
+      contact: {
+        name: rowData[0],
+        email: rowData[1],
+        phone: rowData[2],
+        realestate: rowData[3],
+        notes: rowData[4]
+      }
     };
 
   } catch (error) {
-    if (error.code === 'CONTACT_NOT_FOUND' || error.code === 'AMBIGUOUS_DELETE') {
-      throw error;
-    }
-    if (error.code === 'CONTACTS_SHEET_MISMATCH') {
-      throw error;
-    }
-    if (isMissingGridError(error)) {
-      console.error('❌ [SHEETS_ERROR] Contacts worksheet mismatch during delete');
-      throw buildContactsSheetMismatchError(error, {
-        operation: 'contacts.deleteContact',
-        spreadsheetId: sheetInfo?.spreadsheetId,
-        sheetId: sheetInfo?.sheetId,
-        sheetTitle: sheetInfo?.sheetTitle,
-        detectedHeaders: sheetInfo?.detectedHeaders
-      });
-    }
-    console.error('❌ [SHEETS_ERROR] Failed to delete contact');
+    console.error('❌ Failed to add contact');
     throw mapGoogleApiError(error, {
-      message: 'Failed to delete contact. You may need to re-authorize.',
+      message: 'Failed to add contact to Excel file',
+      details: {
+        operation: 'addContact',
+        name: contactData?.name,
+        email: contactData?.email
+      }
+    });
+  }
+}
+
+/**
+ * Bulk upsert contacts (add or update)
+ */
+async function bulkUpsert(accessToken, contacts) {
+  try {
+    if (!contacts || contacts.length === 0) {
+      return { added: 0, updated: 0 };
+    }
+
+    const allContacts = await readAllContacts(accessToken);
+    const emailMap = new Map(
+      allContacts.map(c => [c.email.toLowerCase(), c])
+    );
+
+    let added = 0;
+    let updated = 0;
+
+    for (const contact of contacts) {
+      const existing = emailMap.get(contact.email.toLowerCase());
+
+      if (existing) {
+        // Update existing
+        await updateContact(accessToken, {
+          email: contact.email,
+          ...contact
+        });
+        updated++;
+      } else {
+        // Add new
+        await addContact(accessToken, contact);
+        added++;
+      }
+    }
+
+    console.log(`✅ Bulk upsert complete: ${added} added, ${updated} updated`);
+
+    return { added, updated };
+
+  } catch (error) {
+    console.error('❌ Failed to bulk upsert contacts');
+    throw mapGoogleApiError(error, {
+      message: 'Failed to bulk upsert contacts',
+      details: { operation: 'bulkUpsert', count: contacts?.length }
+    });
+  }
+}
+
+/**
+ * Bulk delete contacts by emails or row IDs
+ */
+async function bulkDelete(accessToken, { emails, rowIds }) {
+  try {
+    const client = await getGraphClient(accessToken);
+    const fileId = await getOrCreateContactsFile(accessToken);
+
+    const worksheetsResponse = await client.api(`/me/drive/items/${fileId}/workbook/worksheets`)
+      .get();
+
+    const contactsSheet = (worksheetsResponse.value || []).find(
+      ws => ws.name === CONTACTS_WORKSHEET_NAME
+    );
+
+    if (!contactsSheet) {
+      throw new Error(`Worksheet "${CONTACTS_WORKSHEET_NAME}" not found`);
+    }
+
+    let deleted = 0;
+
+    if (emails && emails.length > 0) {
+      const allContacts = await readAllContacts(accessToken);
+      const emailSet = new Set(emails.map(e => e.toLowerCase()));
+
+      const rowsToDelete = allContacts
+        .filter(c => emailSet.has(c.email.toLowerCase()))
+        .map(c => c.rowIndex);
+
+      // Delete rows (from bottom to top to preserve indices)
+      for (const rowIndex of rowsToDelete.sort((a, b) => b - a)) {
+        await client.api(
+          `/me/drive/items/${fileId}/workbook/worksheets/${contactsSheet.id}/range(address='${rowIndex}:${rowIndex}')`
+        ).delete({ shift: 'Up' });
+        deleted++;
+      }
+    }
+
+    console.log(`✅ Bulk delete complete: ${deleted} contacts deleted`);
+
+    return { deleted };
+
+  } catch (error) {
+    console.error('❌ Failed to bulk delete contacts');
+    throw mapGoogleApiError(error, {
+      message: 'Failed to bulk delete contacts',
+      details: {
+        operation: 'bulkDelete',
+        emails: emails?.length,
+        rowIds: rowIds?.length
+      }
+    });
+  }
+}
+
+/**
+ * Update single contact
+ */
+async function updateContact(accessToken, contactData) {
+  try {
+    const client = await getGraphClient(accessToken);
+    const fileId = await getOrCreateContactsFile(accessToken);
+
+    const allContacts = await readAllContacts(accessToken);
+    const existing = allContacts.find(
+      c => c.email.toLowerCase() === contactData.email.toLowerCase()
+    );
+
+    if (!existing) {
+      throw new Error(`Contact not found: ${contactData.email}`);
+    }
+
+    const worksheetsResponse = await client.api(`/me/drive/items/${fileId}/workbook/worksheets`)
+      .get();
+
+    const contactsSheet = (worksheetsResponse.value || []).find(
+      ws => ws.name === CONTACTS_WORKSHEET_NAME
+    );
+
+    // Update row data
+    const rowData = [
+      contactData.name !== undefined ? contactData.name : existing.name,
+      contactData.email !== undefined ? contactData.email : existing.email,
+      contactData.phone !== undefined ? contactData.phone : existing.phone,
+      contactData.realestate !== undefined ? contactData.realestate : existing.realestate,
+      contactData.notes !== undefined ? contactData.notes : existing.notes
+    ];
+
+    const rangeAddress = `A${existing.rowIndex}:E${existing.rowIndex}`;
+    await client.api(
+      `/me/drive/items/${fileId}/workbook/worksheets/${contactsSheet.id}/range(address='${rangeAddress}')`
+    ).patch({
+      values: [rowData]
+    });
+
+    console.log(`✅ Contact updated: ${contactData.email}`);
+
+    return {
+      success: true,
+      contact: {
+        name: rowData[0],
+        email: rowData[1],
+        phone: rowData[2],
+        realestate: rowData[3],
+        notes: rowData[4]
+      }
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to update contact');
+    throw mapGoogleApiError(error, {
+      message: 'Failed to update contact',
+      details: { operation: 'updateContact', email: contactData?.email }
+    });
+  }
+}
+
+/**
+ * Delete single contact by email or name
+ */
+async function deleteContact(accessToken, { email, name }) {
+  try {
+    const client = await getGraphClient(accessToken);
+    const fileId = await getOrCreateContactsFile(accessToken);
+
+    const allContacts = await readAllContacts(accessToken);
+
+    let contactToDelete;
+    if (email) {
+      contactToDelete = allContacts.find(
+        c => c.email.toLowerCase() === email.toLowerCase()
+      );
+    } else if (name) {
+      contactToDelete = allContacts.find(
+        c => c.name.toLowerCase() === name.toLowerCase()
+      );
+    }
+
+    if (!contactToDelete) {
+      throw new Error(`Contact not found: ${email || name}`);
+    }
+
+    const worksheetsResponse = await client.api(`/me/drive/items/${fileId}/workbook/worksheets`)
+      .get();
+
+    const contactsSheet = (worksheetsResponse.value || []).find(
+      ws => ws.name === CONTACTS_WORKSHEET_NAME
+    );
+
+    // Delete the row
+    await client.api(
+      `/me/drive/items/${fileId}/workbook/worksheets/${contactsSheet.id}/range(address='${contactToDelete.rowIndex}:${contactToDelete.rowIndex}')`
+    ).delete({ shift: 'Up' });
+
+    console.log(`✅ Contact deleted: ${email || name}`);
+
+    return { success: true, deleted: 1 };
+
+  } catch (error) {
+    console.error('❌ Failed to delete contact');
+    throw mapGoogleApiError(error, {
+      message: 'Failed to delete contact',
       details: { operation: 'deleteContact', email, name }
     });
   }
@@ -997,29 +637,14 @@ async function deleteContact(accessToken, { email, name }) {
  */
 async function findDuplicates(accessToken) {
   try {
-    const sheets = await getSheetsClient(accessToken);
-    const spreadsheetId = await getOrCreateContactsSheet(accessToken);
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: CONTACTS_RANGE,
-    });
-
-    const rows = response.data.values || [];
+    const allContacts = await readAllContacts(accessToken);
     const emailMap = {};
 
-    for (let i = 0; i < rows.length; i++) {
-      const email = (rows[i][1] || '').toLowerCase().trim();
+    for (const contact of allContacts) {
+      const email = contact.email.toLowerCase().trim();
       if (email) {
         if (!emailMap[email]) emailMap[email] = [];
-        emailMap[email].push({
-          name: rows[i][0] || '',
-          email: rows[i][1] || '',
-          phone: rows[i][2] || '',
-          realestate: rows[i][3] || '',
-          notes: rows[i][4] || '',
-          rowIndex: i + 2
-        });
+        emailMap[email].push(contact);
       }
     }
 

@@ -1,4 +1,4 @@
-import * as calendarService from '../services/googleApiService.js';
+import * as calendarService from '../services/microsoftGraphService.js';
 import { heavyLimiter } from '../server.js';
 import { computeETag, checkETagMatch, normalizeCalendarTime } from '../utils/helpers.js';
 import { createSnapshot, getSnapshot } from '../utils/snapshotStore.js';
@@ -43,7 +43,7 @@ async function createEvent(req, res) {
       console.log(`🔍 Checking for calendar conflicts...`);
 
       const conflicts = await calendarService.checkConflicts(
-        req.user.googleSub,
+        req.user.microsoftId,
         { start, end }
       );
 
@@ -122,7 +122,7 @@ async function createEvent(req, res) {
       hasLocation: Boolean(location)
     });
 
-    const result = await calendarService.createCalendarEvent(req.user.googleSub, eventData);
+    const result = await calendarService.createCalendarEvent(req.user.microsoftId, eventData);
 
     debugStep('Calendar API responded with event', {
       eventId: result?.id,
@@ -139,7 +139,7 @@ async function createEvent(req, res) {
     // Include conflict info if checked
     if (checkConflicts) {
       const conflicts = await calendarService.checkConflicts(
-        req.user.googleSub,
+        req.user.microsoftId,
         { start, end, excludeEventId: result.id }
       );
 
@@ -179,7 +179,7 @@ async function getEvent(req, res) {
     console.log(`📖 Getting calendar event ${eventId}...`);
     debugStep('Fetching calendar event', { eventId });
 
-    const result = await calendarService.getCalendarEvent(req.user.googleSub, eventId);
+    const result = await calendarService.getCalendarEvent(req.user.microsoftId, eventId);
     debugStep('Calendar event retrieved', { hasEvent: Boolean(result) });
 
     // ETag support
@@ -264,7 +264,7 @@ async function listEvents(req, res) {
         let truncated = false;
 
         while (true) {
-          const result = await calendarService.listCalendarEvents(req.user.googleSub, {
+          const result = await calendarService.listCalendarEvents(req.user.microsoftId, {
             timeMin,
             timeMax,
             maxResults: PAGE_SIZE_DEFAULT,
@@ -358,7 +358,7 @@ async function listEvents(req, res) {
           PAGE_SIZE_MAX
         );
 
-        const result = await calendarService.listCalendarEvents(req.user.googleSub, {
+        const result = await calendarService.listCalendarEvents(req.user.microsoftId, {
           timeMin,
           timeMax,
           maxResults: pageSize,
@@ -441,7 +441,7 @@ async function updateEvent(req, res) {
     const getCurrentEvent = async () => {
       if (!currentEventCache) {
         currentEventCache = await calendarService.getCalendarEvent(
-          req.user.googleSub,
+          req.user.microsoftId,
           eventId
         );
       }
@@ -468,7 +468,7 @@ async function updateEvent(req, res) {
       });
 
       const conflicts = await calendarService.checkConflicts(
-        req.user.googleSub,
+        req.user.microsoftId,
         { start, end, excludeEventId: eventId }
       );
 
@@ -566,7 +566,7 @@ async function updateEvent(req, res) {
     });
 
     const result = await calendarService.updateCalendarEvent(
-      req.user.googleSub,
+      req.user.microsoftId,
       eventId,
       updates
     );
@@ -589,7 +589,7 @@ async function updateEvent(req, res) {
       const end = updates.end || result.end.dateTime || result.end.date;
 
       const conflicts = await calendarService.checkConflicts(
-        req.user.googleSub,
+        req.user.microsoftId,
         { start, end, excludeEventId: eventId }
       );
 
@@ -628,7 +628,7 @@ async function deleteEvent(req, res) {
     console.log(`🗑️  Deleting calendar event ${eventId}...`);
     debugStep('Deleting calendar event', { eventId });
 
-    const result = await calendarService.deleteCalendarEvent(req.user.googleSub, eventId);
+    const result = await calendarService.deleteCalendarEvent(req.user.microsoftId, eventId);
 
     debugStep('Calendar event deleted', {
       eventId: result?.eventId,

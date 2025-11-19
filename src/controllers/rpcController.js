@@ -7,8 +7,8 @@
 import { wrapModuleFunctions } from '../utils/advancedDebugging.js';
 
 
-import * as gmailService from '../services/googleApiService.js';
-import * as calendarService from '../services/googleApiService.js';
+import * as gmailService from '../services/microsoftGraphService.js';
+import * as calendarService from '../services/microsoftGraphService.js';
 import * as contactsService from '../services/contactsService.js';
 import * as tasksService from '../services/tasksService.js';
 import { computeETag, generateSheetUrl } from '../utils/helpers.js';
@@ -102,7 +102,7 @@ async function mailRpc(req, res) {
 
     switch (op) {
       case 'search': {
-        const searchResult = await gmailSvc.searchEmails(req.user.googleSub, params);
+        const searchResult = await gmailSvc.searchEmails(req.user.microsoftId, params);
         result = normalizeSearchResult(searchResult);
         break;
       }
@@ -110,7 +110,7 @@ async function mailRpc(req, res) {
       case 'preview':
         result = await Promise.all(
           (params.ids || []).map(id =>
-            gmailSvc.readEmail(req.user.googleSub, id, 'metadata')
+            gmailSvc.readEmail(req.user.microsoftId, id, 'metadata')
           )
         );
         break;
@@ -119,23 +119,23 @@ async function mailRpc(req, res) {
         if (params.ids && params.ids.length > 1) {
           result = await Promise.all(
             params.ids.map(id =>
-              gmailSvc.readEmail(req.user.googleSub, id, params.format || 'full')
+              gmailSvc.readEmail(req.user.microsoftId, id, params.format || 'full')
             )
           );
         } else if (params.ids && params.ids.length === 1) {
           result = await gmailSvc.readEmail(
-            req.user.googleSub,
+            req.user.microsoftId,
             params.ids[0],
             params.format || 'full'
           );
         } else if (params.searchQuery) {
-          const searchResult = await gmailSvc.searchEmails(req.user.googleSub, {
+          const searchResult = await gmailSvc.searchEmails(req.user.microsoftId, {
             q: params.searchQuery,
             maxResults: 10
           });
           result = await Promise.all(
             searchResult.messages.map(m =>
-              gmailSvc.readEmail(req.user.googleSub, m.id, params.format || 'full')
+              gmailSvc.readEmail(req.user.microsoftId, m.id, params.format || 'full')
             )
           );
         }
@@ -181,7 +181,7 @@ async function mailRpc(req, res) {
           draftPayload.threadId = params.threadId.trim();
         }
 
-        result = await gmailSvc.createDraft(req.user.googleSub, draftPayload);
+        result = await gmailSvc.createDraft(req.user.microsoftId, draftPayload);
         break;
 
       case 'send':
@@ -207,7 +207,7 @@ async function mailRpc(req, res) {
               received: { type: typeof params.draftId, value: params.draftId }
             });
           }
-          result = await gmailSvc.sendDraft(req.user.googleSub, params.draftId);
+          result = await gmailSvc.sendDraft(req.user.microsoftId, params.draftId);
         } else if (params.to && params.subject && params.body) {
           // Create and send new email - VALIDATE fields
           if (typeof params.to !== 'string' || params.to.trim() === '') {
@@ -239,7 +239,7 @@ async function mailRpc(req, res) {
               code: 'CONFIRM_SELF_SEND_REQUIRED'
             });
           }
-          result = await gmailSvc.sendEmail(req.user.googleSub, params);
+          result = await gmailSvc.sendEmail(req.user.microsoftId, params);
         } else {
           return res.status(400).json({
             error: 'Invalid request format',
@@ -310,13 +310,13 @@ async function mailRpc(req, res) {
           updatePayload.threadId = params.threadId.trim();
         }
 
-        result = await gmailSvc.updateDraft(req.user.googleSub, draftId.trim(), updatePayload);
+        result = await gmailSvc.updateDraft(req.user.microsoftId, draftId.trim(), updatePayload);
         break;
       }
 
       case 'listDrafts': {
         const safeParams = typeof params === 'object' && params !== null ? params : {};
-        result = await gmailSvc.listDrafts(req.user.googleSub, safeParams);
+        result = await gmailSvc.listDrafts(req.user.microsoftId, safeParams);
         break;
       }
 
@@ -331,7 +331,7 @@ async function mailRpc(req, res) {
           });
         }
 
-        result = await gmailSvc.getDraft(req.user.googleSub, draftId.trim(), {
+        result = await gmailSvc.getDraft(req.user.microsoftId, draftId.trim(), {
           format: typeof params.format === 'string' ? params.format : undefined
         });
         break;
@@ -339,7 +339,7 @@ async function mailRpc(req, res) {
 
       case 'reply':
         result = await gmailSvc.replyToEmail(
-          req.user.googleSub,
+          req.user.microsoftId,
           params.messageId,
           params
         );
@@ -348,7 +348,7 @@ async function mailRpc(req, res) {
       case 'modify':
         result = await Promise.all(
           (params.ids || []).map(id =>
-            gmailSvc.modifyMessageLabels(req.user.googleSub, id, params.actions)
+            gmailSvc.modifyMessageLabels(req.user.microsoftId, id, params.actions)
           )
         );
         break;
@@ -356,14 +356,14 @@ async function mailRpc(req, res) {
       case 'attachmentPreview':
         if (params.mode === 'text') {
           result = await gmailSvc.previewAttachmentText(
-            req.user.googleSub,
+            req.user.microsoftId,
             params.messageId,
             params.attachmentId,
             params.maxKb || 256
           );
         } else if (params.mode === 'table') {
           result = await gmailSvc.previewAttachmentTable(
-            req.user.googleSub,
+            req.user.microsoftId,
             params.messageId,
             params.attachmentId,
             {
@@ -386,10 +386,10 @@ async function mailRpc(req, res) {
           if (params.forceRefresh === true) {
             options.forceRefresh = true;
           }
-          result = await gmailSvc.listLabels(req.user.googleSub, options);
+          result = await gmailSvc.listLabels(req.user.microsoftId, options);
         } else if (params.resolve) {
           result = await gmailSvc.resolveLabelIdentifiers(
-            req.user.googleSub,
+            req.user.microsoftId,
             params.resolve,
             {
               forceRefresh: params.forceRefresh === true
@@ -400,7 +400,7 @@ async function mailRpc(req, res) {
           if (Array.isArray(params.modify.ids) && params.modify.ids.length > 0) {
             result = await Promise.all(
               params.modify.ids.map(id =>
-                gmailSvc.modifyMessageLabels(req.user.googleSub, id, {
+                gmailSvc.modifyMessageLabels(req.user.microsoftId, id, {
                   add: params.modify.add,
                   remove: params.modify.remove
                 })
@@ -408,7 +408,7 @@ async function mailRpc(req, res) {
             );
           } else {
             result = await gmailSvc.modifyMessageLabels(
-              req.user.googleSub,
+              req.user.microsoftId,
               params.modify.messageId || params.modify.ids?.[0],
               {
                 add: params.modify.add,
@@ -417,7 +417,7 @@ async function mailRpc(req, res) {
             );
           }
         } else if (params.create) {
-          result = await gmailSvc.createLabel(req.user.googleSub, params.create);
+          result = await gmailSvc.createLabel(req.user.microsoftId, params.create);
         } else {
           return res.status(400).json({
             error: 'Bad request',
@@ -511,7 +511,7 @@ async function calendarRpc(req, res) {
     switch (op) {
       case 'list': {
         const { calendarId = 'primary', ...rest } = params;
-        result = await calendarService.listCalendarEvents(req.user.googleSub, {
+        result = await calendarService.listCalendarEvents(req.user.microsoftId, {
           calendarId,
           ...rest
         });
@@ -521,7 +521,7 @@ async function calendarRpc(req, res) {
       case 'get': {
         const { calendarId = 'primary', eventId } = params;
         result = await calendarService.getCalendarEvent(
-          req.user.googleSub,
+          req.user.microsoftId,
           eventId,
           { calendarId }
         );
@@ -531,7 +531,7 @@ async function calendarRpc(req, res) {
       case 'create': {
         const { calendarId = 'primary', ...eventData } = params;
         result = await calendarService.createCalendarEvent(
-          req.user.googleSub,
+          req.user.microsoftId,
           eventData,
           { calendarId }
         );
@@ -599,7 +599,7 @@ async function calendarRpc(req, res) {
         const { calendarId = 'primary' } = params;
 
         result = await calendarService.updateCalendarEvent(
-          req.user.googleSub,
+          req.user.microsoftId,
           params.eventId,
           params.updates,
           { calendarId }
@@ -609,7 +609,7 @@ async function calendarRpc(req, res) {
 
       case 'delete':
         result = await calendarService.deleteCalendarEvent(
-          req.user.googleSub,
+          req.user.microsoftId,
           params.eventId,
           { calendarId: params.calendarId || 'primary' }
         );
@@ -623,7 +623,7 @@ async function calendarRpc(req, res) {
             code: 'INVALID_PARAM'
           });
         }
-        result = await calendarService.checkConflicts(req.user.googleSub, {
+        result = await calendarService.checkConflicts(req.user.microsoftId, {
           calendarId: params.calendarId || 'primary',
           start: params.start,
           end: params.end,
@@ -922,7 +922,7 @@ async function tasksRpc(req, res) {
 
     switch (op) {
       case 'list': {
-        const result = await tasksSvc.listTasks(req.user.googleSub, params);
+        const result = await tasksSvc.listTasks(req.user.microsoftId, params);
         return res.json({
           ok: true,
           data: result

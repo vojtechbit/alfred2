@@ -2,7 +2,7 @@ import { getDatabase } from '../config/database.js';
 import { encryptToken, decryptToken } from './tokenService.js';
 import {
   cacheAccessTokenIdentity,
-  purgeIdentitiesForGoogleSub
+  purgeIdentitiesForMicrosoftId
 } from './tokenIdentityService.js';
 import { wrapModuleFunctions } from '../utils/advancedDebugging.js';
 
@@ -48,13 +48,13 @@ async function saveUser(userData) {
       const db = await getDatabase();
       const users = db.collection('users');
 
-    const { googleSub, email, accessToken, refreshToken, expiryDate } = userData;
+    const { microsoftId, email, accessToken, refreshToken, expiryDate } = userData;
 
     const encryptedAccess = encryptToken(accessToken);
     const encryptedRefresh = encryptToken(refreshToken);
 
     const userDoc = {
-      google_sub: googleSub,
+      microsoft_id: microsoftId,
       email: email,
       encrypted_access_token: encryptedAccess.encryptedToken,
       access_token_iv: encryptedAccess.iv,
@@ -69,7 +69,7 @@ async function saveUser(userData) {
     };
 
       return await users.updateOne(
-        { google_sub: googleSub },
+        { microsoft_id: microsoftId },
         {
           $set: userDoc,
           $setOnInsert: { created_at: new Date() },
@@ -82,7 +82,7 @@ async function saveUser(userData) {
     try {
       await cacheAccessTokenIdentity({
         accessToken,
-        googleSub,
+        microsoftId,
         email,
         expiryDate,
         source: 'saveUser'
@@ -107,16 +107,16 @@ async function saveUser(userData) {
 /**
  * Get user by Google Sub (user ID)
  */
-async function getUserByGoogleSub(googleSub) {
+async function getUserByMicrosoftId(microsoftId) {
   try {
     const user = await withDbRetry(async () => {
       const db = await getDatabase();
       const users = db.collection('users');
-      return await users.findOne({ google_sub: googleSub });
-    }, 'getUserByGoogleSub');
+      return await users.findOne({ microsoft_id: microsoftId });
+    }, 'getUserByMicrosoftId');
 
     if (!user) {
-      console.log('⚠️  User not found:', googleSub);
+      console.log('⚠️  User not found:', microsoftId);
       return null;
     }
 
@@ -134,7 +134,7 @@ async function getUserByGoogleSub(googleSub) {
       );
 
       return {
-        googleSub: user.google_sub,
+        microsoftId: user.microsoft_id,
         email: user.email,
         accessToken,
         refreshToken,
@@ -150,7 +150,7 @@ async function getUserByGoogleSub(googleSub) {
   } catch (error) {
     console.error('❌ [DATABASE_ERROR] Failed to get user');
     console.error('Details:', {
-      googleSub,
+      microsoftId,
       errorMessage: error.message,
       timestamp: new Date().toISOString()
     });
@@ -161,7 +161,7 @@ async function getUserByGoogleSub(googleSub) {
 /**
  * Update user tokens after refresh
  */
-async function updateTokens(googleSub, tokens) {
+async function updateTokens(microsoftId, tokens) {
   try {
     await withDbRetry(async () => {
       const db = await getDatabase();
@@ -187,7 +187,7 @@ async function updateTokens(googleSub, tokens) {
       }
 
       return await users.updateOne(
-        { google_sub: googleSub },
+        { microsoft_id: microsoftId },
         {
           $set: updateDoc,
           $unset: { refresh_error: '' }
@@ -201,7 +201,7 @@ async function updateTokens(googleSub, tokens) {
       try {
         const db = await getDatabase();
         const userDoc = await db.collection('users').findOne(
-          { google_sub: googleSub },
+          { microsoft_id: microsoftId },
           { projection: { email: 1 } }
         );
         cacheEmail = userDoc?.email || null;
@@ -213,7 +213,7 @@ async function updateTokens(googleSub, tokens) {
     try {
       await cacheAccessTokenIdentity({
         accessToken: tokens.accessToken,
-        googleSub,
+        microsoftId,
         email: cacheEmail,
         expiryDate: tokens.expiryDate,
         source: tokens.source || 'updateTokens'
@@ -222,11 +222,11 @@ async function updateTokens(googleSub, tokens) {
       console.warn('⚠️  Failed to cache refreshed access token identity:', cacheError.message);
     }
 
-    console.log('✅ Tokens updated for user:', googleSub);
+    console.log('✅ Tokens updated for user:', microsoftId);
   } catch (error) {
     console.error('❌ [DATABASE_ERROR] Failed to update tokens');
     console.error('Details:', {
-      googleSub,
+      microsoftId,
       errorMessage: error.message,
       timestamp: new Date().toISOString()
     });
@@ -237,31 +237,31 @@ async function updateTokens(googleSub, tokens) {
 /**
  * Delete user (GDPR compliance)
  */
-async function deleteUser(googleSub) {
+async function deleteUser(microsoftId) {
   try {
     const result = await withDbRetry(async () => {
       const db = await getDatabase();
       const users = db.collection('users');
-      return await users.deleteOne({ google_sub: googleSub });
+      return await users.deleteOne({ microsoft_id: microsoftId });
     }, 'deleteUser');
 
     try {
-      await purgeIdentitiesForGoogleSub(googleSub);
+      await purgeIdentitiesForMicrosoftId(microsoftId);
     } catch (purgeError) {
       console.warn('⚠️  Failed to purge cached token identities for user:', purgeError.message);
     }
 
     if (result.deletedCount > 0) {
-      console.log('✅ User deleted:', googleSub);
+      console.log('✅ User deleted:', microsoftId);
     } else {
-      console.log('⚠️  User not found for deletion:', googleSub);
+      console.log('⚠️  User not found for deletion:', microsoftId);
     }
 
     return result;
   } catch (error) {
     console.error('❌ [DATABASE_ERROR] Failed to delete user');
     console.error('Details:', {
-      googleSub,
+      microsoftId,
       errorMessage: error.message,
       timestamp: new Date().toISOString()
     });
@@ -272,13 +272,13 @@ async function deleteUser(googleSub) {
 /**
  * Update last used timestamp
  */
-async function updateLastUsed(googleSub) {
+async function updateLastUsed(microsoftId) {
   try {
     await withDbRetry(async () => {
       const db = await getDatabase();
       const users = db.collection('users');
       return await users.updateOne(
-        { google_sub: googleSub },
+        { microsoft_id: microsoftId },
         { $set: { last_used: new Date() } }
       );
     }, 'updateLastUsed', 2); // Only 2 attempts for this non-critical operation
@@ -289,7 +289,7 @@ async function updateLastUsed(googleSub) {
 
 const traced = wrapModuleFunctions('services.databaseService', {
   saveUser,
-  getUserByGoogleSub,
+  getUserByMicrosoftId,
   updateTokens,
   deleteUser,
   updateLastUsed,
@@ -297,7 +297,7 @@ const traced = wrapModuleFunctions('services.databaseService', {
 
 const {
   saveUser: tracedSaveUser,
-  getUserByGoogleSub: tracedGetUserByGoogleSub,
+  getUserByMicrosoftId: tracedGetUserByMicrosoftId,
   updateTokens: tracedUpdateTokens,
   deleteUser: tracedDeleteUser,
   updateLastUsed: tracedUpdateLastUsed,
@@ -305,7 +305,7 @@ const {
 
 export {
   tracedSaveUser as saveUser,
-  tracedGetUserByGoogleSub as getUserByGoogleSub,
+  tracedGetUserByMicrosoftId as getUserByMicrosoftId,
   tracedUpdateTokens as updateTokens,
   tracedDeleteUser as deleteUser,
   tracedUpdateLastUsed as updateLastUsed,

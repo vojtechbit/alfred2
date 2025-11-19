@@ -33,7 +33,7 @@ async function ensureIndexes() {
         throw error;
       }
     }),
-    collection.createIndex({ google_sub: 1 }, { name: 'google_sub_idx' }).catch(error => {
+    collection.createIndex({ microsoft_id: 1 }, { name: 'microsoft_id_idx' }).catch(error => {
       if (error.codeName !== 'IndexOptionsConflict') {
         throw error;
       }
@@ -74,15 +74,15 @@ function computeExpiresAt(expiryDate) {
   return new Date(now + ttlMs);
 }
 
-async function cacheAccessTokenIdentity({ accessToken, googleSub, email = null, expiryDate = null, source = 'unknown' }) {
-  if (!accessToken || !googleSub) {
-    throwServiceError('accessToken and googleSub are required to cache identity', {
+async function cacheAccessTokenIdentity({ accessToken, microsoftId, email = null, expiryDate = null, source = 'unknown' }) {
+  if (!accessToken || !microsoftId) {
+    throwServiceError('accessToken and microsoftId are required to cache identity', {
       statusCode: 400,
       code: 'ACCESS_TOKEN_CACHE_PARAMS_MISSING',
       details: {
         missing: [
           ...(!accessToken ? ['accessToken'] : []),
-          ...(!googleSub ? ['googleSub'] : [])
+          ...(!microsoftId ? ['microsoftId'] : [])
         ]
       }
     });
@@ -101,7 +101,7 @@ async function cacheAccessTokenIdentity({ accessToken, googleSub, email = null, 
     {
       $set: {
         token_hash: tokenHash,
-        google_sub: googleSub,
+        microsoft_id: microsoftId,
         email: email || null,
         expires_at: expiresAt,
         last_seen_at: now,
@@ -115,13 +115,13 @@ async function cacheAccessTokenIdentity({ accessToken, googleSub, email = null, 
   );
 
   console.log('✅ Cached identity for access token', {
-    googleSub,
+    microsoftId,
     email,
     source,
     tokenHash: summarizeSecret(tokenHash)
   });
 
-  return { googleSub, email };
+  return { microsoftId, email };
 }
 
 async function getCachedIdentityForAccessToken(accessToken) {
@@ -151,7 +151,7 @@ async function getCachedIdentityForAccessToken(accessToken) {
   );
 
   return {
-    googleSub: doc.google_sub,
+    microsoftId: doc.microsoft_id,
     email: doc.email || null
   };
 }
@@ -172,16 +172,16 @@ async function invalidateCachedIdentity(accessToken) {
   console.log('🧹 Invalidated cached identity for token', summarizeSecret(tokenHash));
 }
 
-async function purgeIdentitiesForGoogleSub(googleSub) {
+async function purgeIdentitiesForMicrosoftId(microsoftId) {
   await ensureIndexes();
 
   const db = await getDatabase();
   const collection = db.collection(CACHE_COLLECTION);
 
-  const result = await collection.deleteMany({ google_sub: googleSub });
+  const result = await collection.deleteMany({ microsoft_id: microsoftId });
 
   if (result.deletedCount > 0) {
-    console.log(`🧹 Removed ${result.deletedCount} cached access token identities for ${googleSub}`);
+    console.log(`🧹 Removed ${result.deletedCount} cached access token identities for ${microsoftId}`);
   }
 }
 
@@ -189,19 +189,19 @@ const traced = wrapModuleFunctions('services.tokenIdentityService', {
   cacheAccessTokenIdentity,
   getCachedIdentityForAccessToken,
   invalidateCachedIdentity,
-  purgeIdentitiesForGoogleSub,
+  purgeIdentitiesForMicrosoftId,
 });
 
 const {
   cacheAccessTokenIdentity: tracedCacheAccessTokenIdentity,
   getCachedIdentityForAccessToken: tracedGetCachedIdentityForAccessToken,
   invalidateCachedIdentity: tracedInvalidateCachedIdentity,
-  purgeIdentitiesForGoogleSub: tracedPurgeIdentitiesForGoogleSub,
+  purgeIdentitiesForMicrosoftId: tracedPurgeIdentitiesForMicrosoftId,
 } = traced;
 
 export {
   tracedCacheAccessTokenIdentity as cacheAccessTokenIdentity,
   tracedGetCachedIdentityForAccessToken as getCachedIdentityForAccessToken,
   tracedInvalidateCachedIdentity as invalidateCachedIdentity,
-  tracedPurgeIdentitiesForGoogleSub as purgeIdentitiesForGoogleSub,
+  tracedPurgeIdentitiesForMicrosoftId as purgeIdentitiesForMicrosoftId,
 };

@@ -1,7 +1,7 @@
 const errorCatalog = {
   ACCESS_TOKEN_CACHE_PARAMS_MISSING: {
     status: 400,
-    description: 'Required cache parameters (accessToken, googleSub) were missing when caching token identity.'
+    description: 'Required cache parameters (accessToken, microsoftId) were missing when caching token identity.'
   },
   AMBIGUOUS_DELETE: {
     status: 409,
@@ -341,7 +341,7 @@ const errorCatalog = {
   },
   TASKS_USER_NOT_FOUND: {
     status: 401,
-    description: 'No Google Tasks user record exists for the provided googleSub.'
+    description: 'No Google Tasks user record exists for the provided microsoftId.'
   },
   TASK_CREATE_FAILED: {
     status: 502,

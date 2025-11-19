@@ -102,7 +102,7 @@ async function createTask(req, res) {
       due: normalizeDueDate(due)
     };
 
-    const task = await tasksSvc.createTask(req.user.googleSub, payload);
+    const task = await tasksSvc.createTask(req.user.microsoftId, payload);
 
     return res.json({
       ok: true,
@@ -168,7 +168,7 @@ async function modifyTask(req, res) {
     }
 
     const task = await tasksSvc.updateTask(
-      req.user.googleSub,
+      req.user.microsoftId,
       taskListId,
       taskId,
       updates
@@ -222,7 +222,7 @@ async function deleteTask(req, res) {
       });
     }
 
-    await tasksSvc.deleteTask(req.user.googleSub, taskListId, taskId);
+    await tasksSvc.deleteTask(req.user.microsoftId, taskListId, taskId);
 
     return res.json({
       ok: true,

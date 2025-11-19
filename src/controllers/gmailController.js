@@ -1,4 +1,4 @@
-import * as gmailService from '../services/googleApiService.js';
+import * as gmailService from '../services/microsoftGraphService.js';
 import { heavyLimiter } from '../server.js';
 import {
   parseRelativeTime,
@@ -64,7 +64,7 @@ async function sendEmail(req, res) {
       });
     }
 
-    const result = await gmailService.sendEmail(req.user.googleSub, {
+    const result = await gmailService.sendEmail(req.user.microsoftId, {
       to, subject, body, cc, bcc
     });
 
@@ -105,7 +105,7 @@ async function replyToEmail(req, res) {
       });
     }
 
-    const result = await gmailService.replyToEmail(req.user.googleSub, messageId, { body });
+    const result = await gmailService.replyToEmail(req.user.microsoftId, messageId, { body });
 
     res.json({
       success: true,
@@ -136,7 +136,7 @@ async function readEmail(req, res) {
     }
 
     const result = await gmailService.readEmail(
-      req.user.googleSub, 
+      req.user.microsoftId, 
       messageId,
       { 
         format, 
@@ -170,7 +170,7 @@ async function getEmailSnippet(req, res) {
     const { messageId } = req.params;
 
     const result = await gmailService.readEmail(
-      req.user.googleSub, 
+      req.user.microsoftId, 
       messageId,
       { format: 'snippet' }
     );
@@ -202,7 +202,7 @@ async function getEmailSnippet(req, res) {
  * FIXED: Summary should NOT include snippet
  * According to OpenAPI spec, summary should only have: from, subject, date
  */
-async function fetchBatchPreview(googleSub, ids, kind) {
+async function fetchBatchPreview(microsoftId, ids, kind) {
   const results = [];
   
   for (let i = 0; i < ids.length; i += BATCH_READ_CONCURRENCY) {
@@ -211,7 +211,7 @@ async function fetchBatchPreview(googleSub, ids, kind) {
     const promises = batch.map(async (id) => {
       try {
         if (kind === 'summary') {
-          const msg = await gmailService.readEmail(googleSub, id, { format: 'metadata' });
+          const msg = await gmailService.readEmail(microsoftId, id, { format: 'metadata' });
           // FIXED: summary should NOT include snippet
           return {
             id,
@@ -221,14 +221,14 @@ async function fetchBatchPreview(googleSub, ids, kind) {
             readState: msg.readState
           };
         } else if (kind === 'snippet') {
-          const msg = await gmailService.readEmail(googleSub, id, { format: 'snippet' });
+          const msg = await gmailService.readEmail(microsoftId, id, { format: 'snippet' });
           return {
             id,
             snippet: msg.snippet,
             readState: msg.readState
           };
         } else {
-          const msg = await gmailService.readEmail(googleSub, id, { format: 'metadata' });
+          const msg = await gmailService.readEmail(microsoftId, id, { format: 'metadata' });
           return msg;
         }
       } catch (err) {
@@ -269,7 +269,7 @@ async function batchPreview(req, res) {
 
     let allResults = [];
     for (const chunk of chunks) {
-      const chunkResults = await fetchBatchPreview(req.user.googleSub, chunk, kind);
+      const chunkResults = await fetchBatchPreview(req.user.microsoftId, chunk, kind);
       allResults = allResults.concat(chunkResults);
     }
 
@@ -310,7 +310,7 @@ async function batchRead(req, res) {
       
       const promises = batch.map(async (id) => {
         try {
-          return await gmailService.readEmail(req.user.googleSub, id, {
+          return await gmailService.readEmail(req.user.microsoftId, id, {
             format: 'full',
             autoTruncate: true
           });
@@ -418,7 +418,7 @@ async function searchEmails(req, res) {
         let truncated = false;
 
         while (true) {
-          const result = await gmailService.searchEmails(req.user.googleSub, {
+          const result = await gmailService.searchEmails(req.user.microsoftId, {
             query,
             maxResults: PAGE_SIZE_DEFAULT,
             pageToken: currentPageToken
@@ -458,7 +458,7 @@ async function searchEmails(req, res) {
 
         if (includeSummary && allItems.length > 0) {
           const ids = allItems.map(item => item.id);
-          const summaries = await fetchBatchPreview(req.user.googleSub, ids, 'summary');
+          const summaries = await fetchBatchPreview(req.user.microsoftId, ids, 'summary');
           
           const summaryMap = new Map(summaries.map(s => [s.id, s]));
           allItems = allItems.map(item => ({
@@ -510,7 +510,7 @@ async function searchEmails(req, res) {
           PAGE_SIZE_MAX
         );
 
-        const result = await gmailService.searchEmails(req.user.googleSub, {
+        const result = await gmailService.searchEmails(req.user.microsoftId, {
           query,
           maxResults: pageSize,
           pageToken
@@ -525,7 +525,7 @@ async function searchEmails(req, res) {
 
         if (includeSummary && items.length > 0) {
           const ids = items.map(item => item.id);
-          const summaries = await fetchBatchPreview(req.user.googleSub, ids, 'summary');
+          const summaries = await fetchBatchPreview(req.user.microsoftId, ids, 'summary');
           
           const summaryMap = new Map(summaries.map(s => [s.id, s]));
           const itemsWithSummary = items.map(item => ({
@@ -611,7 +611,7 @@ async function createDraft(req, res) {
       });
     }
 
-    const result = await gmailService.createDraft(req.user.googleSub, {
+    const result = await gmailService.createDraft(req.user.microsoftId, {
       to, subject, body
     });
 
@@ -633,7 +633,7 @@ async function deleteEmail(req, res) {
   try {
     const { messageId } = req.params;
 
-    const result = await gmailService.deleteEmail(req.user.googleSub, messageId);
+    const result = await gmailService.deleteEmail(req.user.microsoftId, messageId);
 
     res.json({
       success: true,
@@ -661,7 +661,7 @@ async function toggleStar(req, res) {
       });
     }
 
-    const result = await gmailService.toggleStar(req.user.googleSub, messageId, star);
+    const result = await gmailService.toggleStar(req.user.microsoftId, messageId, star);
 
     res.json({
       success: true
@@ -687,7 +687,7 @@ async function markAsRead(req, res) {
       });
     }
 
-    const result = await gmailService.markAsRead(req.user.googleSub, messageId, read);
+    const result = await gmailService.markAsRead(req.user.microsoftId, messageId, read);
 
     res.json({
       success: true
@@ -712,7 +712,7 @@ async function listLabels(req, res) {
 
     if (typeof searchQuery !== 'undefined') {
       const matchesFor = Array.isArray(searchQuery) ? searchQuery : [searchQuery];
-      const result = await gmailService.listLabels(req.user.googleSub, {
+      const result = await gmailService.listLabels(req.user.microsoftId, {
         includeMatchesFor: matchesFor,
         forceRefresh: forceRefresh === 'true'
       });
@@ -727,7 +727,7 @@ async function listLabels(req, res) {
         };
       }
     } else {
-      const labels = await gmailService.listLabels(req.user.googleSub, {
+      const labels = await gmailService.listLabels(req.user.microsoftId, {
         forceRefresh: forceRefresh === 'true'
       });
 
@@ -757,7 +757,7 @@ async function modifyMessageLabels(req, res) {
     const { messageId } = req.params;
     const { add = [], remove = [] } = req.body;
 
-    const result = await gmailService.modifyMessageLabels(req.user.googleSub, messageId, { add, remove });
+    const result = await gmailService.modifyMessageLabels(req.user.microsoftId, messageId, { add, remove });
 
     res.json(result);
   } catch (error) {
@@ -774,7 +774,7 @@ async function modifyThreadLabels(req, res) {
     const { threadId } = req.params;
     const { add = [], remove = [] } = req.body;
 
-    const result = await gmailService.modifyThreadLabels(req.user.googleSub, threadId, { add, remove });
+    const result = await gmailService.modifyThreadLabels(req.user.microsoftId, threadId, { add, remove });
 
     res.json(result);
   } catch (error) {
@@ -792,7 +792,7 @@ async function getThread(req, res) {
   try {
     const { threadId } = req.params;
 
-    const thread = await gmailService.getThread(req.user.googleSub, threadId);
+    const thread = await gmailService.getThread(req.user.microsoftId, threadId);
 
     res.json({
       success: true,
@@ -819,7 +819,7 @@ async function setThreadRead(req, res) {
       });
     }
 
-    await gmailService.setThreadRead(req.user.googleSub, threadId, read);
+    await gmailService.setThreadRead(req.user.microsoftId, threadId, read);
 
     res.json({
       success: true
@@ -853,7 +853,7 @@ async function replyToThread(req, res) {
       });
     }
 
-    const result = await gmailService.replyToThread(req.user.googleSub, threadId, { body });
+    const result = await gmailService.replyToThread(req.user.microsoftId, threadId, { body });
 
     res.json({
       success: true,
@@ -876,7 +876,7 @@ async function getAttachmentMeta(req, res) {
     const { messageId, attachmentId } = req.params;
 
     const attachment = await gmailService.getAttachmentMeta(
-      req.user.googleSub,
+      req.user.microsoftId,
       messageId,
       attachmentId
     );
@@ -908,7 +908,7 @@ async function previewAttachmentText(req, res) {
     const { maxKb = 256 } = req.query;
 
     const preview = await gmailService.previewAttachmentText(
-      req.user.googleSub,
+      req.user.microsoftId,
       messageId,
       attachmentId,
       parseInt(maxKb)
@@ -938,7 +938,7 @@ async function previewAttachmentTable(req, res) {
     const { sheet = 0, maxRows = 50 } = req.query;
 
     const preview = await gmailService.previewAttachmentTable(
-      req.user.googleSub,
+      req.user.microsoftId,
       messageId,
       attachmentId,
       { sheet, maxRows: parseInt(maxRows) }
@@ -992,7 +992,7 @@ async function downloadAttachment(req, res) {
 
     // Signature is valid - download the attachment
     const attachment = await gmailService.downloadAttachment(
-      req.user.googleSub,
+      req.user.microsoftId,
       messageId,
       attachmentId
     );
@@ -1069,7 +1069,7 @@ async function listFollowupCandidates(req, res) {
     }
 
     const result = await gmailService.listFollowupCandidates(
-      req.user.googleSub,
+      req.user.microsoftId,
       options
     );
 

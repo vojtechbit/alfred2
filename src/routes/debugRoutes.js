@@ -118,12 +118,12 @@ router.post('/caches/flush', (req, res) => {
  */
 router.get('/token-status', async (req, res) => {
   try {
-    const user = await getUserByGoogleSub(req.user.googleSub);
+    const user = await getUserByGoogleSub(req.user.microsoftId);
 
     if (!user) {
       return res.status(404).json({
         error: 'User not found',
-        googleSub: req.user.googleSub
+        microsoftId: req.user.microsoftId
       });
     }
 
@@ -138,7 +138,7 @@ router.get('/token-status', async (req, res) => {
       status: 'ok',
       user: {
         email: user.email,
-        googleSub: user.googleSub
+        microsoftId: user.microsoftId
       },
       token: {
         hasAccessToken: Boolean(user.accessToken),
