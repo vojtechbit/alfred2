@@ -11,7 +11,7 @@ const databaseModulePath = new URL('../src/services/databaseService.js', import.
 const oauthModulePath = new URL('../src/config/oauth.js', import.meta.url).href;
 
 const getUserByGoogleSub = mock.fn(async () => ({
-  googleSub: 'user-1',
+  microsoftId: 'user-1',
   email: 'user@example.com',
   accessToken: 'cached-access-token',
   refreshToken: 'refresh-token',
@@ -76,7 +76,7 @@ mock.module('googleapis', {
   }
 });
 
-const { searchEmails } = await import('../src/services/googleApiService.js');
+const { searchEmails } = await import('../src/services/microsoftGraphService.js');
 
 const { messages, threads, nextPageToken } = await searchEmails('user-1', { query: 'subject:test', maxResults: 5 });
 

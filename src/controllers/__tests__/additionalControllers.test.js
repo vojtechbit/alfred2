@@ -5,7 +5,7 @@ const serverPath = new URL('../../server.js', import.meta.url).href;
 const oauthConfigPath = new URL('../../config/oauth.js', import.meta.url).href;
 const databaseServicePath = new URL('../../services/databaseService.js', import.meta.url).href;
 const contactsServicePath = new URL('../../services/contactsService.js', import.meta.url).href;
-const gmailServicePath = new URL('../../services/googleApiService.js', import.meta.url).href;
+const gmailServicePath = new URL('../../services/microsoftGraphService.js', import.meta.url).href;
 const tasksServicePath = new URL('../../services/tasksService.js', import.meta.url).href;
 const snapshotStorePath = new URL('../../utils/snapshotStore.js', import.meta.url).href;
 const proxyTokenServicePath = new URL('../../services/proxyTokenService.js', import.meta.url).href;
@@ -29,7 +29,7 @@ mock.module(oauthConfigPath, {
 mock.module(databaseServicePath, {
   namedExports: {
     saveUser: mock.fn(async () => {}),
-    getUserByGoogleSub: mock.fn(async () => ({ email: 'user@example.com', googleSub: 'sub', refreshToken: 'refresh' })),
+    getUserByGoogleSub: mock.fn(async () => ({ email: 'user@example.com', microsoftId: 'sub', refreshToken: 'refresh' })),
     updateTokens: mock.fn(async () => {}),
     getUserByProxyToken: mock.fn(async () => null)
   }
@@ -103,7 +103,7 @@ test('authController.initiateOAuth redirects to generated URL', async () => {
 test('authController.checkStatus returns user payload', async () => {
   const jsonPayload = {};
   const res = { json(data) { Object.assign(jsonPayload, data); } };
-  await authController.checkStatus({ user: { email: 'test@example.com', googleSub: 'sub', name: 'Test' } }, res);
+  await authController.checkStatus({ user: { email: 'test@example.com', microsoftId: 'sub', name: 'Test' } }, res);
   assert.equal(jsonPayload.authenticated, true);
   assert.equal(jsonPayload.user.email, 'test@example.com');
 });
@@ -117,7 +117,7 @@ test('authController.handleCallback handles user denial', async () => {
 
 test('calendarController.createEvent validates required fields', async () => {
   const res = { statusCode: null, payload: null, status(code) { this.statusCode = code; return this; }, json(data) { this.payload = data; return this; } };
-  await calendarController.createEvent({ body: { summary: '', start: null, end: null }, user: { googleSub: 'sub' } }, res);
+  await calendarController.createEvent({ body: { summary: '', start: null, end: null }, user: { microsoftId: 'sub' } }, res);
   assert.equal(res.statusCode, 400);
   assert.ok(res.payload.message.includes('summary'));
 });
@@ -131,21 +131,21 @@ test('contactsController.searchContacts requires query parameter', async () => {
 
 test('gmailController.sendEmail enforces body validation', async () => {
   const res = { statusCode: null, payload: null, status(code) { this.statusCode = code; return this; }, json(data) { this.payload = data; return this; } };
-  await gmailController.sendEmail({ body: { to: '', subject: '', body: '' }, user: { googleSub: 'sub', email: 'test@example.com' } }, res);
+  await gmailController.sendEmail({ body: { to: '', subject: '', body: '' }, user: { microsoftId: 'sub', email: 'test@example.com' } }, res);
   assert.equal(res.statusCode, 400);
   assert.ok(res.payload.message.includes('Missing required fields'));
 });
 
 test('tasksController.listTasks rejects expired snapshot token', async () => {
   const res = { statusCode: null, payload: null, status(code) { this.statusCode = code; return this; }, json(data) { this.payload = data; return this; } };
-  await tasksController.listTasks({ query: { aggregate: 'true', snapshotToken: 'invalid' }, user: { googleSub: 'sub' } }, res);
+  await tasksController.listTasks({ query: { aggregate: 'true', snapshotToken: 'invalid' }, user: { microsoftId: 'sub' } }, res);
   assert.equal(res.statusCode, 400);
   assert.equal(res.payload.error, 'Invalid or expired snapshot token');
 });
 
 test('authStatusController.getAuthStatus returns localized success message', async () => {
   const res = { payload: null, json(data) { this.payload = data; } };
-  await authStatusController.getAuthStatus({ user: { email: 'user@example.com', googleSub: 'sub' } }, res);
+  await authStatusController.getAuthStatus({ user: { email: 'user@example.com', microsoftId: 'sub' } }, res);
   assert.equal(res.payload.authenticated, true);
   assert.ok(res.payload.message.includes('Přihlášen'));
 });

@@ -8,7 +8,7 @@ process.env.REDIRECT_URI = process.env.REDIRECT_URI || 'https://example.com/oaut
 process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/test-db';
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
-const { classifyEmailCategory } = await import('../src/services/googleApiService.js');
+const { classifyEmailCategory } = await import('../src/services/microsoftGraphService.js');
 
 describe('classifyEmailCategory', () => {
   it('returns trash when TRASH label is present', () => {

@@ -8,7 +8,7 @@ describe('Sent Email Search in inboxOverview', () => {
   it('should add -in:sent by default (only inbox emails)', async () => {
     // Mock Gmail service
     const mockGmailService = {
-      searchEmails: mock.fn(async (googleSub, params) => {
+      searchEmails: mock.fn(async (microsoftId, params) => {
         // Verify that query contains -in:sent
         assert.ok(params.query.includes('-in:sent'), 'Query should exclude sent emails by default');
         return { messages: [], nextPageToken: null };

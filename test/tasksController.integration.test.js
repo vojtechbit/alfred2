@@ -22,7 +22,7 @@ test('tasks.createTask responds with JSON payloads over HTTP', async () => {
     }
   });
 
-  const createTaskMock = mock.fn(async (googleSub, payload) => {
+  const createTaskMock = mock.fn(async (microsoftId, payload) => {
     if (payload.title === 'Fail from service') {
       throw new ApiError('Service temporarily unavailable', {
         statusCode: 503,
@@ -48,7 +48,7 @@ test('tasks.createTask responds with JSON payloads over HTTP', async () => {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => {
-    req.user = { googleSub: 'user-123' };
+    req.user = { microsoftId: 'user-123' };
     next();
   });
   app.post('/api/tasks', createTask);

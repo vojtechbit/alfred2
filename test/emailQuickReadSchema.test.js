@@ -21,7 +21,7 @@ const facadeModule = await import('../src/services/facadeService.js');
 const { emailQuickRead, EMAIL_QUICK_READ_FORMATS } = facadeModule;
 
 beforeEach(() => {
-  readEmailMock = mock.fn(async (googleSub, messageId, options = {}) => ({
+  readEmailMock = mock.fn(async (microsoftId, messageId, options = {}) => ({
     id: messageId,
     threadId: `thread-${messageId}`,
     from: 'Mock Sender <sender@example.com>',

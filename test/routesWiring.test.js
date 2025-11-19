@@ -28,7 +28,7 @@ mock.module(new URL('../src/controllers/authStatusController.js', import.meta.ur
 mock.module(new URL('../src/controllers/oauthProxyController.js', import.meta.url).href, { namedExports: { authorize: function authorize() {}, callback: function callback() {}, token: function token() {} } });
 mock.module(new URL('../src/services/databaseService.js', import.meta.url).href, { namedExports: { getUserByGoogleSub: async () => ({}) } });
 mock.module(new URL('../src/utils/advancedDebugging.js', import.meta.url).href, { namedExports: { getAdvancedDebugState: () => ({ enabled: true }) } });
-mock.module(new URL('../src/services/googleApiService.js', import.meta.url).href, { namedExports: { getDebugDiagnostics: () => ({ cleared: {} }), flushDebugCaches: () => ({ cleared: {} }) } });
+mock.module(new URL('../src/services/microsoftGraphService.js', import.meta.url).href, { namedExports: { getDebugDiagnostics: () => ({ cleared: {} }), flushDebugCaches: () => ({ cleared: {} }) } });
 mock.module(new URL('../src/utils/snapshotStore.js', import.meta.url).href, { namedExports: { getSnapshotDiagnostics: () => ({ active: 0 }), clearSnapshots: () => 0 } });
 mock.module(new URL('../src/utils/redact.js', import.meta.url).href, { namedExports: { sanitizeForLog: () => ({}) } });
 mock.module('dotenv', { defaultExport: { config: () => ({}) } });

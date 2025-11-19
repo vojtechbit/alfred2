@@ -8,7 +8,7 @@ process.env.REDIRECT_URI ||= 'https://dummy.example/oauth';
 process.env.MONGODB_URI ||= 'mongodb://localhost:27017/test';
 process.env.ENCRYPTION_KEY ||= '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
-const { resolveLabelIdentifiers } = await import('../src/services/googleApiService.js');
+const { resolveLabelIdentifiers } = await import('../src/services/microsoftGraphService.js');
 
 const baseLabels = [
   { id: 'Label_1', name: 'Účto škola', type: 'user', color: null },

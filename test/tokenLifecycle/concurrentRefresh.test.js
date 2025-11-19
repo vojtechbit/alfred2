@@ -16,7 +16,7 @@ describe('Concurrent Token Refresh (Mutex Protection)', () => {
     refreshCallCount = 0;
 
     const mockUser = {
-      googleSub: 'concurrent_test_user',
+      microsoftId: 'concurrent_test_user',
       email: 'concurrent@example.com',
       accessToken: 'expired_token',
       refreshToken: 'refresh_token_123',
@@ -46,7 +46,7 @@ describe('Concurrent Token Refresh (Mutex Protection)', () => {
   });
 
   it('should prevent thundering herd with mutex', async () => {
-    const { getValidAccessToken } = await import('../../src/services/googleApiService.js');
+    const { getValidAccessToken } = await import('../../src/services/microsoftGraphService.js');
 
     // Simulate 10 concurrent requests
     const concurrentRequests = 10;
@@ -73,7 +73,7 @@ describe('Concurrent Token Refresh (Mutex Protection)', () => {
   });
 
   it('should release mutex after refresh completes', async () => {
-    const { getValidAccessToken } = await import('../../src/services/googleApiService.js');
+    const { getValidAccessToken } = await import('../../src/services/microsoftGraphService.js');
 
     // First batch of concurrent requests
     const batch1 = Array(5).fill(null).map(() =>
@@ -85,7 +85,7 @@ describe('Concurrent Token Refresh (Mutex Protection)', () => {
 
     // Reset token to expired again
     globalThis.__facadeMocks.databaseService.getUserByGoogleSub = async () => ({
-      googleSub: 'concurrent_test_user',
+      microsoftId: 'concurrent_test_user',
       email: 'concurrent@example.com',
       accessToken: 'expired_again',
       refreshToken: 'refresh_token_123',
@@ -118,7 +118,7 @@ describe('Concurrent Token Refresh (Mutex Protection)', () => {
       throw error;
     };
 
-    const { getValidAccessToken } = await import('../../src/services/googleApiService.js');
+    const { getValidAccessToken } = await import('../../src/services/microsoftGraphService.js');
 
     const promises = Array(5).fill(null).map(() =>
       getValidAccessToken('concurrent_test_user')

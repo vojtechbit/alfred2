@@ -138,7 +138,7 @@ test('tasksRpc list delegates to tasksService listTasks', async () => {
       op: 'list',
       params: { maxResults: 5 }
     },
-    user: { googleSub: 'user-42' }
+    user: { microsoftId: 'user-42' }
   };
   const response = new MockResponse();
 
@@ -163,7 +163,7 @@ test('tasksRpc complete now returns migration error with hints', async () => {
       op: 'complete',
       params: { taskListId: 'list-1', taskId: 'task-9' }
     },
-    user: { googleSub: 'user-42' }
+    user: { microsoftId: 'user-42' }
   };
   const response = new MockResponse();
 
@@ -185,7 +185,7 @@ test('tasksRpc create returns migration error using root level payloads', async 
       op: 'create',
       title: 'New task'
     },
-    user: { googleSub: 'user-77' }
+    user: { microsoftId: 'user-77' }
   };
   const response = new MockResponse();
 
@@ -211,7 +211,7 @@ test('mailRpc createDraft creates draft via Gmail service', async () => {
         bcc: 'bcc@example.com'
       }
     },
-    user: { googleSub: 'user-sub-1' }
+    user: { microsoftId: 'user-sub-1' }
   };
   const response = new MockResponse();
 
@@ -243,7 +243,7 @@ test('mailRpc search normalizes Gmail links', async () => {
       op: 'search',
       params: { query: 'from:boss@example.com' }
     },
-    user: { googleSub: 'user-search' }
+    user: { microsoftId: 'user-search' }
   };
   const response = new MockResponse();
 
@@ -277,7 +277,7 @@ test('mailRpc createDraft rejects missing subject', async () => {
         body: 'Návrh zprávy'
       }
     },
-    user: { googleSub: 'user-sub-2' }
+    user: { microsoftId: 'user-sub-2' }
   };
   const response = new MockResponse();
 
@@ -302,7 +302,7 @@ test('mailRpc updateDraft delegates to Gmail service', async () => {
         threadId: 'thread-123'
       }
     },
-    user: { googleSub: 'user-sub-3' }
+    user: { microsoftId: 'user-sub-3' }
   };
   const response = new MockResponse();
 
@@ -339,7 +339,7 @@ test('mailRpc updateDraft validates required fields', async () => {
         body: 42
       }
     },
-    user: { googleSub: 'user-sub-4' }
+    user: { microsoftId: 'user-sub-4' }
   };
   const response = new MockResponse();
 
@@ -358,7 +358,7 @@ test('mailRpc listDrafts forwards request to Gmail service', async () => {
       op: 'listDrafts',
       params: { maxResults: 5, pageToken: ' token ' }
     },
-    user: { googleSub: 'user-sub-5' }
+    user: { microsoftId: 'user-sub-5' }
   };
   const response = new MockResponse();
 
@@ -384,7 +384,7 @@ test('mailRpc getDraft requires draftId', async () => {
       op: 'getDraft',
       params: { format: 'full' }
     },
-    user: { googleSub: 'user-sub-6' }
+    user: { microsoftId: 'user-sub-6' }
   };
   const response = new MockResponse();
 
@@ -402,7 +402,7 @@ test('mailRpc getDraft delegates to Gmail service', async () => {
       op: 'getDraft',
       params: { draftId: ' draft-555 ', format: 'metadata' }
     },
-    user: { googleSub: 'user-sub-7' }
+    user: { microsoftId: 'user-sub-7' }
   };
   const response = new MockResponse();
 

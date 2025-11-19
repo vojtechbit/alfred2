@@ -43,7 +43,7 @@ describe('meetingEmailsToday briefing macro', () => {
       ]
     }));
 
-    const searchEmails = mock.fn(async (_googleSub, { query }) => {
+    const searchEmails = mock.fn(async (_microsoftId, { query }) => {
       if (query.includes('from:alice@example.com')) {
         return {
           resultSizeEstimate: 1,
