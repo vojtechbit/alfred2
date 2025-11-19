@@ -217,12 +217,12 @@ async function getValidAccessToken(microsoftId, forceRefresh = false) {
     }
 
     // Check if token needs refresh
-    const needsRefresh = forceRefresh || isTokenExpired(user.token_expiry);
+    const needsRefresh = forceRefresh || isTokenExpired(user.tokenExpiry);
 
     if (!needsRefresh) {
       console.log('✅ [MICROSOFT_GRAPH] Access token still valid, using cached token');
       await updateLastUsed(microsoftId);
-      return user.access_token;
+      return user.accessToken;
     }
 
     // Start refresh process
@@ -230,15 +230,16 @@ async function getValidAccessToken(microsoftId, forceRefresh = false) {
 
     const refreshPromise = (async () => {
       try {
-        const newTokens = await refreshAccessToken(user.refresh_token);
+        const newTokens = await refreshAccessToken(user.refreshToken);
 
         // Update tokens in database
         const tokenExpiry = determineExpiryDate(newTokens.expires_in);
 
         await updateTokens(microsoftId, {
-          access_token: newTokens.access_token,
-          refresh_token: newTokens.refresh_token,  // IMPORTANT: Save new refresh token!
-          token_expiry: tokenExpiry
+          accessToken: newTokens.access_token,
+          refreshToken: newTokens.refresh_token,  // IMPORTANT: Save new refresh token!
+          expiryDate: tokenExpiry,
+          source: 'getValidAccessToken'
         });
 
         console.log('✅ [MICROSOFT_GRAPH] Access token refreshed successfully');
@@ -342,16 +343,1629 @@ async function handleGraphApiCall(microsoftId, apiCall, retryCount = 0) {
   }
 }
 
-// ==================== TO BE CONTINUED ====================
-// This is Part 1 of microsoftGraphService.js
-// Part 2 will include Mail API functions
-// Part 3 will include Calendar API functions
-// Part 4 will include Tasks and Contacts API functions
+// ==================== MAIL API HELPER FUNCTIONS ====================
 
-// Placeholder exports (will be implemented in next parts)
+/**
+ * Extracts skip token from @odata.nextLink for pagination
+ */
+function extractSkipToken(nextLink) {
+  if (!nextLink) return null;
+
+  try {
+    const url = new URL(nextLink);
+    return url.searchParams.get('$skiptoken') || url.searchParams.get('$skip');
+  } catch (error) {
+    console.warn('Failed to extract skip token from nextLink:', nextLink);
+    return null;
+  }
+}
+
+/**
+ * Converts Microsoft Graph message to Gmail-compatible format
+ *
+ * @param {Object} message - Microsoft Graph message object
+ * @param {string} microsoftId - User's Microsoft ID
+ * @returns {Object} Gmail-compatible message object
+ */
+function convertMessageToGmailFormat(message, microsoftId) {
+  // Extract email addresses
+  const from = message.from?.emailAddress;
+  const to = message.toRecipients?.map(r => r.emailAddress) || [];
+  const cc = message.ccRecipients?.map(r => r.emailAddress) || [];
+  const bcc = message.bccRecipients?.map(r => r.emailAddress) || [];
+
+  // Map Outlook folders to Gmail labels
+  const labels = [];
+  if (message.parentFolderId) {
+    const gmailLabel = OUTLOOK_TO_GMAIL_FOLDER_MAP[message.parentFolderId.toLowerCase()];
+    if (gmailLabel) labels.push(gmailLabel);
+  }
+
+  // Add UNREAD label if not read
+  if (!message.isRead) labels.push('UNREAD');
+
+  // Add STARRED label if flagged
+  if (message.flag?.flagStatus === 'flagged') labels.push('STARRED');
+
+  // Extract attachments info
+  const attachments = (message.attachments || []).map(att => ({
+    filename: att.name,
+    mimeType: att.contentType,
+    size: att.size,
+    attachmentId: att.id,
+    isInline: att.isInline || false
+  }));
+
+  // Get body content
+  const bodyContent = message.body?.content || '';
+  const bodyType = message.body?.contentType || 'text';
+
+  return {
+    id: message.id,
+    threadId: message.conversationId,
+    labelIds: labels,
+    snippet: message.bodyPreview || '',
+    internalDate: new Date(message.receivedDateTime || message.sentDateTime).getTime(),
+    payload: {
+      headers: [
+        { name: 'From', value: from ? `${from.name || ''} <${from.address}>` : '' },
+        { name: 'To', value: to.map(r => `${r.name || ''} <${r.address}>`).join(', ') },
+        { name: 'Cc', value: cc.map(r => `${r.name || ''} <${r.address}>`).join(', ') },
+        { name: 'Subject', value: message.subject || '' },
+        { name: 'Date', value: message.receivedDateTime || message.sentDateTime }
+      ],
+      mimeType: bodyType === 'html' ? 'text/html' : 'text/plain',
+      body: {
+        size: bodyContent.length,
+        data: Buffer.from(bodyContent).toString('base64')
+      },
+      parts: attachments.length > 0 ? attachments : undefined
+    },
+    sizeEstimate: message.body?.content?.length || 0,
+    raw: message,  // Keep original Microsoft message for reference
+
+    // Microsoft-specific fields
+    _microsoft: {
+      parentFolderId: message.parentFolderId,
+      conversationId: message.conversationId,
+      isRead: message.isRead,
+      isDraft: message.isDraft,
+      flag: message.flag,
+      importance: message.importance,
+      categories: message.categories
+    }
+  };
+}
+
+/**
+ * Builds OData filter for email search
+ *
+ * @param {Object} options - Search options
+ * @returns {string} OData filter string
+ */
+function buildEmailFilter(options = {}) {
+  const filters = [];
+
+  if (options.from) {
+    filters.push(`from/emailAddress/address eq '${options.from}'`);
+  }
+
+  if (options.to) {
+    filters.push(`toRecipients/any(r: r/emailAddress/address eq '${options.to}')`);
+  }
+
+  if (options.subject) {
+    filters.push(`contains(subject, '${options.subject}')`);
+  }
+
+  if (options.hasAttachment !== undefined) {
+    filters.push(`hasAttachments eq ${options.hasAttachment}`);
+  }
+
+  if (options.isRead !== undefined) {
+    filters.push(`isRead eq ${options.isRead}`);
+  }
+
+  if (options.receivedAfter) {
+    const date = new Date(options.receivedAfter).toISOString();
+    filters.push(`receivedDateTime ge ${date}`);
+  }
+
+  if (options.receivedBefore) {
+    const date = new Date(options.receivedBefore).toISOString();
+    filters.push(`receivedDateTime le ${date}`);
+  }
+
+  return filters.join(' and ');
+}
+
+// ==================== MAIL API FUNCTIONS ====================
+
+/**
+ * Search/list emails with filters
+ *
+ * Equivalent to Gmail's messages.list()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {Object} options - Search options
+ * @param {string} [options.folder='inbox'] - Folder to search (inbox, sentitems, drafts, etc.)
+ * @param {number} [options.maxResults=100] - Maximum number of results
+ * @param {string} [options.pageToken] - Page token for pagination
+ * @param {string} [options.q] - Search query
+ * @param {boolean} [options.includeSpamTrash=false] - Include spam and trash
+ * @returns {Promise<Object>} Search results with messages and nextPageToken
+ */
+async function searchEmails(microsoftId, options = {}) {
+  const timer = startTimer();
+
+  try {
+    const {
+      folder = 'inbox',
+      maxResults = 100,
+      pageToken = null,
+      q = null,
+      includeSpamTrash = false
+    } = options;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    // Build request
+    let request = client.api(`/me/mailFolders/${folder}/messages`)
+      .top(Math.min(maxResults, 999))  // Microsoft Graph max is 999
+      .orderby('receivedDateTime DESC')
+      .select([
+        'id',
+        'conversationId',
+        'subject',
+        'bodyPreview',
+        'from',
+        'toRecipients',
+        'ccRecipients',
+        'receivedDateTime',
+        'sentDateTime',
+        'hasAttachments',
+        'isRead',
+        'isDraft',
+        'flag',
+        'importance',
+        'parentFolderId'
+      ].join(','));
+
+    // Add search query if provided
+    if (q) {
+      request = request.search(q);
+    }
+
+    // Add pagination token
+    if (pageToken) {
+      request = request.skiptoken(pageToken);
+    }
+
+    const response = await handleGraphApiCall(microsoftId, () => request.get());
+
+    const messages = (response.value || []).map(msg =>
+      convertMessageToGmailFormat(msg, microsoftId)
+    );
+
+    const nextPageToken = extractSkipToken(response['@odata.nextLink']);
+
+    logDuration('graph.searchEmails', timer, {
+      folder,
+      count: messages.length,
+      hasNext: !!nextPageToken
+    });
+
+    return {
+      messages,
+      nextPageToken,
+      resultSizeEstimate: messages.length
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to search emails:', error);
+    throw mapGoogleApiError(error, 'searchEmails');
+  }
+}
+
+/**
+ * Read full email message
+ *
+ * Equivalent to Gmail's messages.get()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @param {Object} [options] - Read options
+ * @param {string} [options.format='full'] - Response format (full, metadata, minimal)
+ * @returns {Promise<Object>} Full message object
+ */
+async function readEmail(microsoftId, messageId, options = {}) {
+  const timer = startTimer();
+
+  try {
+    const { format = 'full' } = options;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    let select = [
+      'id',
+      'conversationId',
+      'subject',
+      'body',
+      'bodyPreview',
+      'from',
+      'toRecipients',
+      'ccRecipients',
+      'bccRecipients',
+      'replyTo',
+      'receivedDateTime',
+      'sentDateTime',
+      'hasAttachments',
+      'isRead',
+      'isDraft',
+      'flag',
+      'importance',
+      'categories',
+      'parentFolderId',
+      'conversationIndex',
+      'internetMessageId'
+    ];
+
+    if (format === 'minimal') {
+      select = ['id', 'subject', 'from', 'receivedDateTime'];
+    } else if (format === 'metadata') {
+      select = select.filter(f => f !== 'body');
+    }
+
+    const request = client.api(`/me/messages/${messageId}`)
+      .select(select.join(','))
+      .expand('attachments');
+
+    const message = await handleGraphApiCall(microsoftId, () => request.get());
+
+    const result = convertMessageToGmailFormat(message, microsoftId);
+
+    logDuration('graph.readEmail', timer, {
+      messageId,
+      format,
+      hasAttachments: message.hasAttachments
+    });
+
+    return result;
+
+  } catch (error) {
+    console.error('❌ Failed to read email:', error);
+    throw mapGoogleApiError(error, 'readEmail');
+  }
+}
+
+/**
+ * Get email preview (lighter version of readEmail)
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @returns {Promise<Object>} Email preview
+ */
+async function getEmailPreview(microsoftId, messageId) {
+  return await readEmail(microsoftId, messageId, { format: 'metadata' });
+}
+
+/**
+ * Send email with optional attachments
+ *
+ * Equivalent to Gmail's messages.send()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {Object} emailData - Email data
+ * @param {string} emailData.to - Recipient email (comma-separated for multiple)
+ * @param {string} [emailData.cc] - CC recipients
+ * @param {string} [emailData.bcc] - BCC recipients
+ * @param {string} emailData.subject - Email subject
+ * @param {string} emailData.body - Email body (can be HTML)
+ * @param {boolean} [emailData.isHtml=false] - Whether body is HTML
+ * @param {Array} [emailData.attachments] - Attachments array
+ * @returns {Promise<Object>} Sent message info
+ */
+async function sendEmail(microsoftId, emailData) {
+  const timer = startTimer();
+
+  try {
+    const {
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      isHtml = false,
+      attachments = []
+    } = emailData;
+
+    // Parse recipients
+    const toRecipients = to.split(',').map(email => ({
+      emailAddress: { address: email.trim() }
+    }));
+
+    const ccRecipients = cc ? cc.split(',').map(email => ({
+      emailAddress: { address: email.trim() }
+    })) : [];
+
+    const bccRecipients = bcc ? bcc.split(',').map(email => ({
+      emailAddress: { address: email.trim() }
+    })) : [];
+
+    // Build message
+    const message = {
+      subject,
+      body: {
+        contentType: isHtml ? 'HTML' : 'Text',
+        content: body
+      },
+      toRecipients,
+      ccRecipients,
+      bccRecipients
+    };
+
+    // Add attachments if provided
+    if (attachments && attachments.length > 0) {
+      message.attachments = attachments.map(att => ({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: att.filename || att.name,
+        contentType: att.mimeType || 'application/octet-stream',
+        contentBytes: att.data  // Base64 encoded
+      }));
+    }
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const result = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me/sendMail')
+        .post({
+          message,
+          saveToSentItems: true
+        })
+    );
+
+    logDuration('graph.sendEmail', timer, {
+      to: toRecipients.length,
+      cc: ccRecipients.length,
+      attachments: attachments.length
+    });
+
+    return {
+      success: true,
+      messageId: result?.id,
+      message: 'Email sent successfully'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to send email:', error);
+    throw mapGoogleApiError(error, 'sendEmail');
+  }
+}
+
+/**
+ * Reply to an email
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID to reply to
+ * @param {Object} replyData - Reply data
+ * @param {string} replyData.body - Reply body
+ * @param {boolean} [replyData.isHtml=false] - Whether body is HTML
+ * @param {boolean} [replyData.replyAll=false] - Reply to all recipients
+ * @returns {Promise<Object>} Reply result
+ */
+async function replyToEmail(microsoftId, messageId, replyData) {
+  const timer = startTimer();
+
+  try {
+    const {
+      body,
+      isHtml = false,
+      replyAll = false
+    } = replyData;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const endpoint = replyAll
+      ? `/me/messages/${messageId}/replyAll`
+      : `/me/messages/${messageId}/reply`;
+
+    await handleGraphApiCall(microsoftId, () =>
+      client.api(endpoint)
+        .post({
+          comment: body
+        })
+    );
+
+    logDuration('graph.replyToEmail', timer, {
+      messageId,
+      replyAll
+    });
+
+    return {
+      success: true,
+      message: 'Reply sent successfully'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to reply to email:', error);
+    throw mapGoogleApiError(error, 'replyToEmail');
+  }
+}
+
+/**
+ * Create draft email
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {Object} draftData - Draft email data (same as sendEmail)
+ * @returns {Promise<Object>} Created draft
+ */
+async function createDraft(microsoftId, draftData) {
+  const timer = startTimer();
+
+  try {
+    const {
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      isHtml = false
+    } = draftData;
+
+    const toRecipients = to ? to.split(',').map(email => ({
+      emailAddress: { address: email.trim() }
+    })) : [];
+
+    const ccRecipients = cc ? cc.split(',').map(email => ({
+      emailAddress: { address: email.trim() }
+    })) : [];
+
+    const bccRecipients = bcc ? bcc.split(',').map(email => ({
+      emailAddress: { address: email.trim() }
+    })) : [];
+
+    const message = {
+      subject: subject || '',
+      body: {
+        contentType: isHtml ? 'HTML' : 'Text',
+        content: body || ''
+      },
+      toRecipients,
+      ccRecipients,
+      bccRecipients
+    };
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const draft = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me/messages')
+        .post(message)
+    );
+
+    logDuration('graph.createDraft', timer, { draftId: draft.id });
+
+    return convertMessageToGmailFormat(draft, microsoftId);
+
+  } catch (error) {
+    console.error('❌ Failed to create draft:', error);
+    throw mapGoogleApiError(error, 'createDraft');
+  }
+}
+
+/**
+ * Send existing draft
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} draftId - Draft ID
+ * @returns {Promise<Object>} Send result
+ */
+async function sendDraft(microsoftId, draftId) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    await handleGraphApiCall(microsoftId, () =>
+      client.api(`/me/messages/${draftId}/send`)
+        .post({})
+    );
+
+    logDuration('graph.sendDraft', timer, { draftId });
+
+    return {
+      success: true,
+      message: 'Draft sent successfully'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to send draft:', error);
+    throw mapGoogleApiError(error, 'sendDraft');
+  }
+}
+
+/**
+ * Update draft email
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} draftId - Draft ID
+ * @param {Object} updates - Fields to update
+ * @returns {Promise<Object>} Updated draft
+ */
+async function updateDraft(microsoftId, draftId, updates) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const message = {};
+
+    if (updates.subject !== undefined) {
+      message.subject = updates.subject;
+    }
+
+    if (updates.body !== undefined) {
+      message.body = {
+        contentType: updates.isHtml ? 'HTML' : 'Text',
+        content: updates.body
+      };
+    }
+
+    if (updates.to !== undefined) {
+      message.toRecipients = updates.to.split(',').map(email => ({
+        emailAddress: { address: email.trim() }
+      }));
+    }
+
+    const draft = await handleGraphApiCall(microsoftId, () =>
+      client.api(`/me/messages/${draftId}`)
+        .patch(message)
+    );
+
+    logDuration('graph.updateDraft', timer, { draftId });
+
+    return convertMessageToGmailFormat(draft, microsoftId);
+
+  } catch (error) {
+    console.error('❌ Failed to update draft:', error);
+    throw mapGoogleApiError(error, 'updateDraft');
+  }
+}
+
+/**
+ * List draft emails
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {number} [maxResults=100] - Maximum number of results
+ * @returns {Promise<Array>} Array of draft messages
+ */
+async function listDrafts(microsoftId, maxResults = 100) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const response = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me/mailFolders/drafts/messages')
+        .top(Math.min(maxResults, 999))
+        .orderby('lastModifiedDateTime DESC')
+        .get()
+    );
+
+    const drafts = (response.value || []).map(msg =>
+      convertMessageToGmailFormat(msg, microsoftId)
+    );
+
+    logDuration('graph.listDrafts', timer, { count: drafts.length });
+
+    return drafts;
+
+  } catch (error) {
+    console.error('❌ Failed to list drafts:', error);
+    throw mapGoogleApiError(error, 'listDrafts');
+  }
+}
+
+/**
+ * Get single draft by ID
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} draftId - Draft ID
+ * @returns {Promise<Object>} Draft message
+ */
+async function getDraft(microsoftId, draftId) {
+  return await readEmail(microsoftId, draftId);
+}
+
+/**
+ * Delete email message
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @returns {Promise<Object>} Delete result
+ */
+async function deleteEmail(microsoftId, messageId) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    await handleGraphApiCall(microsoftId, () =>
+      client.api(`/me/messages/${messageId}`)
+        .delete()
+    );
+
+    logDuration('graph.deleteEmail', timer, { messageId });
+
+    return {
+      success: true,
+      message: 'Email deleted successfully'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to delete email:', error);
+    throw mapGoogleApiError(error, 'deleteEmail');
+  }
+}
+
+/**
+ * Toggle star/flag on email
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @param {boolean} starred - Whether to star or unstar
+ * @returns {Promise<Object>} Update result
+ */
+async function toggleStar(microsoftId, messageId, starred) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    await handleGraphApiCall(microsoftId, () =>
+      client.api(`/me/messages/${messageId}`)
+        .patch({
+          flag: {
+            flagStatus: starred ? 'flagged' : 'notFlagged'
+          }
+        })
+    );
+
+    logDuration('graph.toggleStar', timer, { messageId, starred });
+
+    return {
+      success: true,
+      starred
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to toggle star:', error);
+    throw mapGoogleApiError(error, 'toggleStar');
+  }
+}
+
+/**
+ * Mark email as read or unread
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @param {boolean} read - Whether to mark as read or unread
+ * @returns {Promise<Object>} Update result
+ */
+async function markAsRead(microsoftId, messageId, read) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    await handleGraphApiCall(microsoftId, () =>
+      client.api(`/me/messages/${messageId}`)
+        .patch({ isRead: read })
+    );
+
+    logDuration('graph.markAsRead', timer, { messageId, read });
+
+    return {
+      success: true,
+      isRead: read
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to mark as read:', error);
+    throw mapGoogleApiError(error, 'markAsRead');
+  }
+}
+
+/**
+ * Move message to folder (modify labels in Gmail terminology)
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @param {Array<string>} addLabels - Labels to add (folder names)
+ * @param {Array<string>} removeLabels - Labels to remove
+ * @returns {Promise<Object>} Update result
+ */
+async function modifyMessageLabels(microsoftId, messageId, addLabels = [], removeLabels = []) {
+  const timer = startTimer();
+
+  try {
+    // In Outlook, we can only move message to one folder at a time
+    // Take the first label to add and convert to Outlook folder
+    if (addLabels.length > 0) {
+      const targetLabel = addLabels[0];
+      const targetFolder = GMAIL_TO_OUTLOOK_FOLDER_MAP[targetLabel] || targetLabel;
+
+      const client = await getAuthenticatedClient(microsoftId);
+
+      await handleGraphApiCall(microsoftId, () =>
+        client.api(`/me/messages/${messageId}/move`)
+          .post({
+            destinationId: targetFolder
+          })
+      );
+    }
+
+    logDuration('graph.modifyMessageLabels', timer, {
+      messageId,
+      added: addLabels.length,
+      removed: removeLabels.length
+    });
+
+    return {
+      success: true,
+      message: 'Labels modified successfully'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to modify labels:', error);
+    throw mapGoogleApiError(error, 'modifyMessageLabels');
+  }
+}
+
+/**
+ * Get email thread (conversation)
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} threadId - Thread/conversation ID
+ * @returns {Promise<Array>} Array of messages in thread
+ */
+async function getThread(microsoftId, threadId) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    // Search for all messages with this conversation ID
+    const response = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me/messages')
+        .filter(`conversationId eq '${threadId}'`)
+        .orderby('receivedDateTime ASC')
+        .expand('attachments')
+        .get()
+    );
+
+    const messages = (response.value || []).map(msg =>
+      convertMessageToGmailFormat(msg, microsoftId)
+    );
+
+    logDuration('graph.getThread', timer, {
+      threadId,
+      count: messages.length
+    });
+
+    return messages;
+
+  } catch (error) {
+    console.error('❌ Failed to get thread:', error);
+    throw mapGoogleApiError(error, 'getThread');
+  }
+}
+
+/**
+ * Get attachment metadata
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @param {string} attachmentId - Attachment ID
+ * @returns {Promise<Object>} Attachment metadata
+ */
+async function getAttachmentMeta(microsoftId, messageId, attachmentId) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const attachment = await handleGraphApiCall(microsoftId, () =>
+      client.api(`/me/messages/${messageId}/attachments/${attachmentId}`)
+        .get()
+    );
+
+    logDuration('graph.getAttachmentMeta', timer, {
+      messageId,
+      attachmentId,
+      size: attachment.size
+    });
+
+    return {
+      filename: attachment.name,
+      mimeType: attachment.contentType,
+      size: attachment.size,
+      attachmentId: attachment.id,
+      data: attachment.contentBytes  // Base64 encoded
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to get attachment metadata:', error);
+    throw mapGoogleApiError(error, 'getAttachmentMeta');
+  }
+}
+
+/**
+ * Download attachment
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} messageId - Message ID
+ * @param {string} attachmentId - Attachment ID
+ * @returns {Promise<Object>} Attachment data
+ */
+async function downloadAttachment(microsoftId, messageId, attachmentId) {
+  return await getAttachmentMeta(microsoftId, messageId, attachmentId);
+}
+
+/**
+ * Get user's email addresses
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @returns {Promise<Array>} Array of email addresses
+ */
+async function getUserAddresses(microsoftId) {
+  const timer = startTimer();
+
+  // Check cache first
+  const cached = userAddressCache.get(microsoftId);
+  if (cached && (Date.now() - cached.timestamp) < USER_ADDRESS_CACHE_TTL_MS) {
+    return cached.addresses;
+  }
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const user = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me')
+        .select('mail,userPrincipalName,proxyAddresses')
+        .get()
+    );
+
+    const addresses = [
+      user.mail,
+      user.userPrincipalName,
+      ...(user.proxyAddresses || [])
+        .filter(addr => addr.startsWith('SMTP:'))
+        .map(addr => addr.substring(5))
+    ].filter(Boolean);
+
+    // Cache the result
+    userAddressCache.set(microsoftId, {
+      addresses,
+      timestamp: Date.now()
+    });
+
+    logDuration('graph.getUserAddresses', timer, {
+      count: addresses.length
+    });
+
+    return addresses;
+
+  } catch (error) {
+    console.error('❌ Failed to get user addresses:', error);
+    throw mapGoogleApiError(error, 'getUserAddresses');
+  }
+}
+
+/**
+ * List mail folders (labels in Gmail)
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @returns {Promise<Array>} Array of folders
+ */
+async function listLabels(microsoftId) {
+  const timer = startTimer();
+
+  // Check cache first
+  const cached = folderDirectoryCache.get(microsoftId);
+  if (cached && (Date.now() - cached.timestamp) < FOLDER_CACHE_TTL_MS) {
+    return cached.folders;
+  }
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const response = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me/mailFolders')
+        .select('id,displayName,totalItemCount,unreadItemCount')
+        .get()
+    );
+
+    const folders = (response.value || []).map(folder => ({
+      id: folder.id,
+      name: folder.displayName,
+      type: 'user',
+      messagesTotal: folder.totalItemCount,
+      messagesUnread: folder.unreadItemCount,
+      // Map to Gmail label if applicable
+      _gmailEquivalent: OUTLOOK_TO_GMAIL_FOLDER_MAP[folder.id.toLowerCase()]
+    }));
+
+    // Cache the result
+    folderDirectoryCache.set(microsoftId, {
+      folders,
+      timestamp: Date.now()
+    });
+
+    logDuration('graph.listLabels', timer, {
+      count: folders.length
+    });
+
+    return folders;
+
+  } catch (error) {
+    console.error('❌ Failed to list labels:', error);
+    throw mapGoogleApiError(error, 'listLabels');
+  }
+}
+
+/**
+ * Create new mail folder (label)
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} name - Folder name
+ * @returns {Promise<Object>} Created folder
+ */
+async function createLabel(microsoftId, name) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const folder = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me/mailFolders')
+        .post({
+          displayName: name
+        })
+    );
+
+    // Invalidate cache
+    folderDirectoryCache.delete(microsoftId);
+
+    logDuration('graph.createLabel', timer, { name });
+
+    return {
+      id: folder.id,
+      name: folder.displayName,
+      type: 'user'
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to create label:', error);
+    throw mapGoogleApiError(error, 'createLabel');
+  }
+}
+
+// ==================== CALENDAR API FUNCTIONS ====================
+
+/**
+ * Create calendar event
+ *
+ * Equivalent to Google Calendar's events.insert()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {Object} eventData - Event data
+ * @param {string} eventData.summary - Event title
+ * @param {string} [eventData.description] - Event description
+ * @param {Object} eventData.start - Start time ({ dateTime, timeZone } or { date })
+ * @param {Object} eventData.end - End time ({ dateTime, timeZone } or { date })
+ * @param {string} [eventData.location] - Event location
+ * @param {Array} [eventData.attendees] - Array of attendee emails or objects
+ * @param {Object} [eventData.reminders] - Reminder settings
+ * @param {Object} [options] - Additional options
+ * @param {string} [options.calendarId='primary'] - Calendar ID
+ * @returns {Promise<Object>} Created event
+ */
+async function createCalendarEvent(microsoftId, eventData, options = {}) {
+  const timer = startTimer();
+
+  try {
+    const { calendarId = 'primary' } = options;
+    const fallbackTimeZone = eventData.timeZone || REFERENCE_TIMEZONE;
+
+    // Build event object for Microsoft Graph
+    const event = {
+      subject: eventData.summary,
+      body: {
+        contentType: 'Text',
+        content: eventData.description || ''
+      }
+    };
+
+    // Handle start time
+    if (eventData.start) {
+      if (eventData.start.dateTime) {
+        // Timed event
+        const timeZone = eventData.start.timeZone || fallbackTimeZone;
+        event.start = {
+          dateTime: eventData.start.dateTime,
+          timeZone: convertIANAToWindows(timeZone)
+        };
+      } else if (eventData.start.date) {
+        // All-day event
+        event.start = {
+          dateTime: eventData.start.date,
+          timeZone: 'UTC'
+        };
+        event.isAllDay = true;
+      }
+    }
+
+    // Handle end time
+    if (eventData.end) {
+      if (eventData.end.dateTime) {
+        const timeZone = eventData.end.timeZone || fallbackTimeZone;
+        event.end = {
+          dateTime: eventData.end.dateTime,
+          timeZone: convertIANAToWindows(timeZone)
+        };
+      } else if (eventData.end.date) {
+        event.end = {
+          dateTime: eventData.end.date,
+          timeZone: 'UTC'
+        };
+        event.isAllDay = true;
+      }
+    }
+
+    // Handle location
+    if (eventData.location) {
+      event.location = {
+        displayName: eventData.location
+      };
+    }
+
+    // Handle attendees
+    if (eventData.attendees && eventData.attendees.length > 0) {
+      event.attendees = eventData.attendees.map(attendee => {
+        if (typeof attendee === 'string') {
+          return {
+            emailAddress: { address: attendee },
+            type: 'required'
+          };
+        } else if (attendee && attendee.email) {
+          return {
+            emailAddress: {
+              address: attendee.email,
+              name: attendee.displayName
+            },
+            type: attendee.optional ? 'optional' : 'required'
+          };
+        }
+        return null;
+      }).filter(Boolean);
+    }
+
+    // Handle reminders
+    if (eventData.reminders) {
+      if (eventData.reminders.useDefault === false && eventData.reminders.overrides) {
+        event.isReminderOn = true;
+        event.reminderMinutesBeforeStart = eventData.reminders.overrides[0]?.minutes || 15;
+      }
+    }
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    // Determine endpoint based on calendar ID
+    const endpoint = calendarId === 'primary'
+      ? '/me/events'
+      : `/me/calendars/${calendarId}/events`;
+
+    const result = await handleGraphApiCall(microsoftId, () =>
+      client.api(endpoint)
+        .post(event)
+    );
+
+    logDuration('graph.createCalendarEvent', timer, {
+      calendarId,
+      hasAttendees: !!eventData.attendees,
+      isAllDay: !!event.isAllDay
+    });
+
+    return result;
+
+  } catch (error) {
+    console.error('❌ Failed to create calendar event:', error);
+    throw mapGoogleApiError(error, 'createCalendarEvent');
+  }
+}
+
+/**
+ * Get single calendar event
+ *
+ * Equivalent to Google Calendar's events.get()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} eventId - Event ID
+ * @param {Object} [options] - Additional options
+ * @param {string} [options.calendarId='primary'] - Calendar ID
+ * @returns {Promise<Object>} Event object
+ */
+async function getCalendarEvent(microsoftId, eventId, options = {}) {
+  const timer = startTimer();
+
+  try {
+    const { calendarId = 'primary' } = options;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const endpoint = calendarId === 'primary'
+      ? `/me/events/${eventId}`
+      : `/me/calendars/${calendarId}/events/${eventId}`;
+
+    const event = await handleGraphApiCall(microsoftId, () =>
+      client.api(endpoint)
+        .get()
+    );
+
+    logDuration('graph.getCalendarEvent', timer, { eventId, calendarId });
+
+    return event;
+
+  } catch (error) {
+    console.error('❌ Failed to get calendar event:', error);
+    throw mapGoogleApiError(error, 'getCalendarEvent');
+  }
+}
+
+/**
+ * List calendar events
+ *
+ * Equivalent to Google Calendar's events.list()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {Object} [options] - List options
+ * @param {string} [options.calendarId='primary'] - Calendar ID
+ * @param {string} [options.timeMin] - Start time (ISO 8601)
+ * @param {string} [options.timeMax] - End time (ISO 8601)
+ * @param {number} [options.maxResults=250] - Maximum results
+ * @param {string} [options.query] - Search query
+ * @returns {Promise<Object>} Events list
+ */
+async function listCalendarEvents(microsoftId, options = {}) {
+  const timer = startTimer();
+
+  try {
+    const {
+      calendarId = 'primary',
+      timeMin,
+      timeMax,
+      maxResults = 250,
+      query
+    } = options;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const endpoint = calendarId === 'primary'
+      ? '/me/calendar/events'
+      : `/me/calendars/${calendarId}/events`;
+
+    let request = client.api(endpoint)
+      .top(Math.min(maxResults, 999))
+      .orderby('start/dateTime ASC');
+
+    // Build filter
+    const filters = [];
+    if (timeMin) {
+      filters.push(`start/dateTime ge '${timeMin}'`);
+    }
+    if (timeMax) {
+      filters.push(`start/dateTime le '${timeMax}'`);
+    }
+
+    if (filters.length > 0) {
+      request = request.filter(filters.join(' and '));
+    }
+
+    // Add search if provided
+    if (query) {
+      request = request.search(query);
+    }
+
+    const response = await handleGraphApiCall(microsoftId, () => request.get());
+
+    logDuration('graph.listCalendarEvents', timer, {
+      calendarId,
+      count: response.value?.length || 0
+    });
+
+    return {
+      items: response.value || [],
+      nextPageToken: extractSkipToken(response['@odata.nextLink'])
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to list calendar events:', error);
+    throw mapGoogleApiError(error, 'listCalendarEvents');
+  }
+}
+
+/**
+ * Update calendar event
+ *
+ * Equivalent to Google Calendar's events.update()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} eventId - Event ID
+ * @param {Object} updates - Fields to update
+ * @param {Object} [options] - Additional options
+ * @param {string} [options.calendarId='primary'] - Calendar ID
+ * @returns {Promise<Object>} Updated event
+ */
+async function updateCalendarEvent(microsoftId, eventId, updates, options = {}) {
+  const timer = startTimer();
+
+  try {
+    const { calendarId = 'primary' } = options;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    // First get the existing event
+    const endpoint = calendarId === 'primary'
+      ? `/me/events/${eventId}`
+      : `/me/calendars/${calendarId}/events/${eventId}`;
+
+    const existing = await handleGraphApiCall(microsoftId, () =>
+      client.api(endpoint)
+        .get()
+    );
+
+    // Build update object
+    const updateData = {};
+
+    if (updates.summary !== undefined) {
+      updateData.subject = updates.summary;
+    }
+
+    if (updates.description !== undefined) {
+      updateData.body = {
+        contentType: 'Text',
+        content: updates.description
+      };
+    }
+
+    if (updates.location !== undefined) {
+      updateData.location = {
+        displayName: updates.location
+      };
+    }
+
+    if (updates.start) {
+      if (updates.start.dateTime) {
+        const timeZone = updates.start.timeZone || REFERENCE_TIMEZONE;
+        updateData.start = {
+          dateTime: updates.start.dateTime,
+          timeZone: convertIANAToWindows(timeZone)
+        };
+      } else if (updates.start.date) {
+        updateData.start = {
+          dateTime: updates.start.date,
+          timeZone: 'UTC'
+        };
+        updateData.isAllDay = true;
+      }
+    }
+
+    if (updates.end) {
+      if (updates.end.dateTime) {
+        const timeZone = updates.end.timeZone || REFERENCE_TIMEZONE;
+        updateData.end = {
+          dateTime: updates.end.dateTime,
+          timeZone: convertIANAToWindows(timeZone)
+        };
+      } else if (updates.end.date) {
+        updateData.end = {
+          dateTime: updates.end.date,
+          timeZone: 'UTC'
+        };
+        updateData.isAllDay = true;
+      }
+    }
+
+    if (updates.attendees) {
+      updateData.attendees = updates.attendees.map(attendee => {
+        if (typeof attendee === 'string') {
+          return {
+            emailAddress: { address: attendee },
+            type: 'required'
+          };
+        } else if (attendee && attendee.email) {
+          return {
+            emailAddress: {
+              address: attendee.email,
+              name: attendee.displayName
+            },
+            type: attendee.optional ? 'optional' : 'required'
+          };
+        }
+        return null;
+      }).filter(Boolean);
+    }
+
+    const result = await handleGraphApiCall(microsoftId, () =>
+      client.api(endpoint)
+        .patch(updateData)
+    );
+
+    logDuration('graph.updateCalendarEvent', timer, { eventId, calendarId });
+
+    return result;
+
+  } catch (error) {
+    console.error('❌ Failed to update calendar event:', error);
+    throw mapGoogleApiError(error, 'updateCalendarEvent');
+  }
+}
+
+/**
+ * Delete calendar event
+ *
+ * Equivalent to Google Calendar's events.delete()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {string} eventId - Event ID
+ * @param {Object} [options] - Additional options
+ * @param {string} [options.calendarId='primary'] - Calendar ID
+ * @returns {Promise<Object>} Delete result
+ */
+async function deleteCalendarEvent(microsoftId, eventId, options = {}) {
+  const timer = startTimer();
+
+  try {
+    const { calendarId = 'primary' } = options;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const endpoint = calendarId === 'primary'
+      ? `/me/events/${eventId}`
+      : `/me/calendars/${calendarId}/events/${eventId}`;
+
+    await handleGraphApiCall(microsoftId, () =>
+      client.api(endpoint)
+        .delete()
+    );
+
+    logDuration('graph.deleteCalendarEvent', timer, { eventId, calendarId });
+
+    return {
+      success: true,
+      eventId
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to delete calendar event:', error);
+    throw mapGoogleApiError(error, 'deleteCalendarEvent');
+  }
+}
+
+/**
+ * Check for calendar conflicts
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @param {Object} options - Check options
+ * @param {string} [options.calendarId='primary'] - Calendar ID
+ * @param {string} options.start - Start time (ISO 8601)
+ * @param {string} options.end - End time (ISO 8601)
+ * @param {string} [options.excludeEventId] - Event ID to exclude
+ * @returns {Promise<Array>} Array of conflicting events
+ */
+async function checkConflicts(microsoftId, options) {
+  const timer = startTimer();
+
+  try {
+    const {
+      calendarId = 'primary',
+      start,
+      end,
+      excludeEventId
+    } = options;
+
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const endpoint = calendarId === 'primary'
+      ? '/me/calendar/events'
+      : `/me/calendars/${calendarId}/events`;
+
+    const response = await handleGraphApiCall(microsoftId, () =>
+      client.api(endpoint)
+        .filter(`start/dateTime lt '${end}' and end/dateTime gt '${start}'`)
+        .select('id,subject,start,end,webLink')
+        .get()
+    );
+
+    const events = response.value || [];
+    const conflicts = [];
+    const requestStart = new Date(start);
+    const requestEnd = new Date(end);
+
+    for (const event of events) {
+      if (excludeEventId && event.id === excludeEventId) {
+        continue;
+      }
+
+      const eventStart = new Date(event.start.dateTime);
+      const eventEnd = new Date(event.end.dateTime);
+
+      if (eventStart < requestEnd && eventEnd > requestStart) {
+        conflicts.push({
+          eventId: event.id,
+          summary: event.subject,
+          start: event.start.dateTime,
+          end: event.end.dateTime,
+          htmlLink: event.webLink
+        });
+      }
+    }
+
+    logDuration('graph.checkConflicts', timer, {
+      calendarId,
+      conflicts: conflicts.length
+    });
+
+    return conflicts;
+
+  } catch (error) {
+    console.error('❌ Failed to check conflicts:', error);
+    throw mapGoogleApiError(error, 'checkConflicts');
+  }
+}
+
+/**
+ * List user's calendars
+ *
+ * Equivalent to Google Calendar's calendarList.list()
+ *
+ * @param {string} microsoftId - Microsoft user ID
+ * @returns {Promise<Array>} Array of calendars
+ */
+async function listCalendars(microsoftId) {
+  const timer = startTimer();
+
+  try {
+    const client = await getAuthenticatedClient(microsoftId);
+
+    const response = await handleGraphApiCall(microsoftId, () =>
+      client.api('/me/calendars')
+        .select('id,name,isDefaultCalendar,canEdit')
+        .get()
+    );
+
+    const calendars = (response.value || []).map(calendar => ({
+      id: calendar.id,
+      displayName: calendar.name,
+      isPrimary: calendar.isDefaultCalendar || false,
+      accessRole: calendar.canEdit ? 'owner' : 'reader'
+    }));
+
+    logDuration('graph.listCalendars', timer, {
+      count: calendars.length
+    });
+
+    return calendars;
+
+  } catch (error) {
+    console.error('❌ Failed to list calendars:', error);
+    throw mapGoogleApiError(error, 'listCalendars');
+  }
+}
+
+// ==================== TASKS API FUNCTIONS ====================
+// (To be implemented in next update)
+
+// ==================== CONTACTS API FUNCTIONS ====================
+// (To be implemented in next update)
+
+// ==================== EXPORTS ====================
+
+const traced = wrapModuleFunctions('services.microsoftGraphService', {
+  // Mail functions
+  searchEmails,
+  readEmail,
+  getEmailPreview,
+  sendEmail,
+  replyToEmail,
+  createDraft,
+  sendDraft,
+  updateDraft,
+  listDrafts,
+  getDraft,
+  deleteEmail,
+  toggleStar,
+  markAsRead,
+  modifyMessageLabels,
+  getThread,
+  getAttachmentMeta,
+  downloadAttachment,
+  getUserAddresses,
+  listLabels,
+  createLabel,
+  // Calendar functions
+  createCalendarEvent,
+  getCalendarEvent,
+  listCalendarEvents,
+  updateCalendarEvent,
+  deleteCalendarEvent,
+  checkConflicts,
+  listCalendars,
+});
+
+const {
+  searchEmails: tracedSearchEmails,
+  readEmail: tracedReadEmail,
+  getEmailPreview: tracedGetEmailPreview,
+  sendEmail: tracedSendEmail,
+  replyToEmail: tracedReplyToEmail,
+  createDraft: tracedCreateDraft,
+  sendDraft: tracedSendDraft,
+  updateDraft: tracedUpdateDraft,
+  listDrafts: tracedListDrafts,
+  getDraft: tracedGetDraft,
+  deleteEmail: tracedDeleteEmail,
+  toggleStar: tracedToggleStar,
+  markAsRead: tracedMarkAsRead,
+  modifyMessageLabels: tracedModifyMessageLabels,
+  getThread: tracedGetThread,
+  getAttachmentMeta: tracedGetAttachmentMeta,
+  downloadAttachment: tracedDownloadAttachment,
+  getUserAddresses: tracedGetUserAddresses,
+  listLabels: tracedListLabels,
+  createLabel: tracedCreateLabel,
+  // Calendar functions
+  createCalendarEvent: tracedCreateCalendarEvent,
+  getCalendarEvent: tracedGetCalendarEvent,
+  listCalendarEvents: tracedListCalendarEvents,
+  updateCalendarEvent: tracedUpdateCalendarEvent,
+  deleteCalendarEvent: tracedDeleteCalendarEvent,
+  checkConflicts: tracedCheckConflicts,
+  listCalendars: tracedListCalendars,
+} = traced;
+
 export {
   EMAIL_SIZE_LIMITS,
   getValidAccessToken,
   getDebugDiagnostics,
-  flushDebugCaches
+  flushDebugCaches,
+  // Mail API
+  tracedSearchEmails as searchEmails,
+  tracedReadEmail as readEmail,
+  tracedGetEmailPreview as getEmailPreview,
+  tracedSendEmail as sendEmail,
+  tracedReplyToEmail as replyToEmail,
+  tracedCreateDraft as createDraft,
+  tracedSendDraft as sendDraft,
+  tracedUpdateDraft as updateDraft,
+  tracedListDrafts as listDrafts,
+  tracedGetDraft as getDraft,
+  tracedDeleteEmail as deleteEmail,
+  tracedToggleStar as toggleStar,
+  tracedMarkAsRead as markAsRead,
+  tracedModifyMessageLabels as modifyMessageLabels,
+  tracedGetThread as getThread,
+  tracedGetAttachmentMeta as getAttachmentMeta,
+  tracedDownloadAttachment as downloadAttachment,
+  tracedGetUserAddresses as getUserAddresses,
+  tracedListLabels as listLabels,
+  tracedCreateLabel as createLabel,
+  // Calendar API
+  tracedCreateCalendarEvent as createCalendarEvent,
+  tracedGetCalendarEvent as getCalendarEvent,
+  tracedListCalendarEvents as listCalendarEvents,
+  tracedUpdateCalendarEvent as updateCalendarEvent,
+  tracedDeleteCalendarEvent as deleteCalendarEvent,
+  tracedCheckConflicts as checkConflicts,
+  tracedListCalendars as listCalendars,
 };

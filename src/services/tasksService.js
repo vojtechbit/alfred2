@@ -1,6 +1,8 @@
-import { google } from 'googleapis';
-import { getUserByGoogleSub, updateTokens, updateLastUsed } from './databaseService.js';
-import { refreshAccessToken } from '../config/oauth.js';
+import { Client } from '@microsoft/microsoft-graph-client';
+import 'isomorphic-fetch';
+import { getUserByMicrosoftId, updateTokens, updateLastUsed } from './databaseService.js';
+import { refreshAccessToken } from '../config/microsoft.js';
+import { determineExpiryDate, isTokenExpired } from '../utils/tokenExpiry.js';
 import dotenv from 'dotenv';
 import { wrapModuleFunctions } from '../utils/advancedDebugging.js';
 import { mapGoogleApiError, throwServiceError } from './serviceErrors.js';
@@ -8,17 +10,19 @@ import { mapGoogleApiError, throwServiceError } from './serviceErrors.js';
 dotenv.config();
 
 /**
- * Google Tasks Service
- * Handles task management via Google Tasks API
+ * Microsoft To Do Service
+ * Handles task management via Microsoft Graph To Do API
+ *
+ * Replaces Google Tasks with Microsoft To Do
  */
 
 /**
  * Get valid access token (auto-refresh if expired)
  */
-async function getValidAccessToken(googleSub) {
+async function getValidAccessToken(microsoftId) {
   try {
-    const user = await getUserByGoogleSub(googleSub);
-    
+    const user = await getUserByMicrosoftId(microsoftId);
+
     if (!user) {
       throwServiceError('User not found in database', {
         statusCode: 401,
@@ -27,22 +31,20 @@ async function getValidAccessToken(googleSub) {
       });
     }
 
-    updateLastUsed(googleSub).catch(err => 
+    updateLastUsed(microsoftId).catch(err =>
       console.error('Failed to update last_used:', err.message)
     );
 
-    const now = new Date();
-    const expiry = new Date(user.tokenExpiry);
-    const bufferTime = 5 * 60 * 1000;
+    const needsRefresh = isTokenExpired(user.tokenExpiry);
 
-    if (now >= (expiry.getTime() - bufferTime)) {
+    if (needsRefresh) {
       console.log('🔄 Access token expired, refreshing...');
-      
+
       try {
         const newTokens = await refreshAccessToken(user.refreshToken);
-        const expiryDate = new Date(Date.now() + ((newTokens.expiry_date || 3600) * 1000));
-        
-        await updateTokens(googleSub, {
+        const expiryDate = determineExpiryDate(newTokens.expires_in);
+
+        await updateTokens(microsoftId, {
           accessToken: newTokens.access_token,
           refreshToken: newTokens.refresh_token || user.refreshToken,
           expiryDate,
@@ -56,7 +58,7 @@ async function getValidAccessToken(googleSub) {
         console.error('❌ Token refresh failed - user needs to re-authenticate');
         throwServiceError('Authentication required - please log in again', {
           statusCode: 401,
-          code: 'GOOGLE_UNAUTHORIZED',
+          code: 'MICROSOFT_UNAUTHORIZED',
           requiresReauth: true,
           cause: refreshError
         });
@@ -67,49 +69,42 @@ async function getValidAccessToken(googleSub) {
   } catch (error) {
     console.error('❌ [TOKEN_ERROR] Failed to get valid access token');
     console.error('Details:', {
-      googleSub,
+      microsoftId,
       errorMessage: error.message,
       errorCode: error.code,
       timestamp: new Date().toISOString()
     });
     throw mapGoogleApiError(error, {
       message: 'Failed to get valid access token',
-      details: { googleSub },
+      details: { microsoftId },
       cause: error
     });
   }
 }
 
 /**
- * Get authenticated Tasks API client
- * Creates a NEW OAuth2 client instance for each request to avoid conflicts
+ * Get authenticated Microsoft Graph client
  */
-async function getTasksClient(googleSub) {
+async function getGraphClient(microsoftId) {
   try {
-    const accessToken = await getValidAccessToken(googleSub);
-    
-    // Create NEW OAuth2 client instance for this request
-    const { OAuth2 } = google.auth;
-    const client = new OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.REDIRECT_URI
-    );
-    
-    client.setCredentials({ access_token: accessToken });
-    
-    return google.tasks({ version: 'v1', auth: client });
+    const accessToken = await getValidAccessToken(microsoftId);
+
+    return Client.init({
+      authProvider: (done) => {
+        done(null, accessToken);
+      }
+    });
 
   } catch (error) {
-    console.error('❌ [TASKS_ERROR] Failed to get Tasks client');
+    console.error('❌ [TASKS_ERROR] Failed to get Graph client');
     console.error('Details:', {
-      googleSub,
+      microsoftId,
       errorMessage: error.message,
       timestamp: new Date().toISOString()
     });
     throw mapGoogleApiError(error, {
-      message: 'Failed to get Tasks client',
-      details: { googleSub },
+      message: 'Failed to get Graph client',
+      details: { microsoftId },
       cause: error
     });
   }
@@ -117,23 +112,23 @@ async function getTasksClient(googleSub) {
 
 /**
  * List tasks with pagination support
- * @param {string} googleSub - User's Google ID
+ * @param {string} microsoftId - User's Microsoft ID
  * @param {object} options - { tasklistId?, maxResults?, pageToken?, showCompleted? }
  * @returns {object} { items, nextPageToken }
  */
-async function listTasks(googleSub, options = {}) {
+async function listTasks(microsoftId, options = {}) {
   try {
-    const tasksClient = await getTasksClient(googleSub);
+    const client = await getGraphClient(microsoftId);
 
     // Get task list ID (default if not provided)
     let tasklistId = options.tasklistId;
-    
-    if (!tasklistId) {
-      const taskListsResponse = await tasksClient.tasklists.list({
-        maxResults: 1
-      });
 
-      const taskLists = taskListsResponse.data.items || [];
+    if (!tasklistId) {
+      const listResponse = await client.api('/me/todo/lists')
+        .top(1)
+        .get();
+
+      const taskLists = listResponse.value || [];
 
       if (taskLists.length === 0) {
         return { items: [], nextPageToken: null };
@@ -143,44 +138,56 @@ async function listTasks(googleSub, options = {}) {
     }
 
     // List tasks with pagination
-    const params = {
-      tasklist: tasklistId,
-      maxResults: options.maxResults || 20,
-      showCompleted: options.showCompleted !== undefined ? options.showCompleted : false,
-      showHidden: false
-    };
+    let request = client.api(`/me/todo/lists/${tasklistId}/tasks`)
+      .top(options.maxResults || 20);
 
-    if (options.pageToken) {
-      params.pageToken = options.pageToken;
+    // Filter completed tasks if needed
+    if (options.showCompleted === false) {
+      request = request.filter("status ne 'completed'");
     }
 
-    const response = await tasksClient.tasks.list(params);
+    if (options.pageToken) {
+      request = request.skiptoken(options.pageToken);
+    }
 
-    const items = (response.data.items || []).map(task => ({
+    const response = await request.get();
+
+    const items = (response.value || []).map(task => ({
       id: task.id,
       title: task.title,
-      notes: task.notes || '',
-      due: task.due || null,
-      status: task.status,
+      notes: task.body?.content || '',
+      due: task.dueDateTime?.dateTime || null,
+      status: task.status === 'completed' ? 'completed' : 'needsAction',
       taskListId: tasklistId
     }));
 
+    // Extract next page token from @odata.nextLink
+    let nextPageToken = null;
+    if (response['@odata.nextLink']) {
+      try {
+        const url = new URL(response['@odata.nextLink']);
+        nextPageToken = url.searchParams.get('$skiptoken');
+      } catch (e) {
+        console.warn('Failed to extract skiptoken:', e.message);
+      }
+    }
+
     return {
       items,
-      nextPageToken: response.data.nextPageToken || null
+      nextPageToken
     };
 
   } catch (error) {
     console.error('❌ [TASKS_ERROR] Failed to list tasks');
     console.error('Details:', {
       errorMessage: error.message,
-      statusCode: error.response?.status,
+      statusCode: error.statusCode,
       timestamp: new Date().toISOString()
     });
     throw mapGoogleApiError(error, {
       message: 'Failed to list tasks',
       details: {
-        googleSub,
+        microsoftId,
         tasklistId: options.tasklistId,
         maxResults: options.maxResults,
         showCompleted: options.showCompleted,
@@ -194,17 +201,17 @@ async function listTasks(googleSub, options = {}) {
 /**
  * List all tasks from all task lists (legacy - for backward compatibility)
  */
-async function listAllTasks(googleSub) {
+async function listAllTasks(microsoftId) {
   let taskLists = [];
   try {
-    const tasks = await getTasksClient(googleSub);
+    const client = await getGraphClient(microsoftId);
 
     // First, get all task lists
-    const taskListsResponse = await tasks.tasklists.list({
-      maxResults: 100
-    });
+    const listResponse = await client.api('/me/todo/lists')
+      .top(100)
+      .get();
 
-    taskLists = taskListsResponse.data.items || [];
+    taskLists = listResponse.value || [];
 
     if (taskLists.length === 0) {
       console.log('⚠️  No task lists found');
@@ -216,28 +223,26 @@ async function listAllTasks(googleSub) {
 
     for (const taskList of taskLists) {
       try {
-        const tasksResponse = await tasks.tasks.list({
-          tasklist: taskList.id,
-          showCompleted: false, // Only show incomplete tasks
-          showHidden: false
-        });
+        const tasksResponse = await client.api(`/me/todo/lists/${taskList.id}/tasks`)
+          .filter("status ne 'completed'") // Only show incomplete tasks
+          .get();
 
-        const listTasks = tasksResponse.data.items || [];
+        const listTasks = tasksResponse.value || [];
 
         // Add task list name to each task
         listTasks.forEach(task => {
           allTasks.push({
             id: task.id,
             title: task.title,
-            notes: task.notes || '',
-            due: task.due || null,
-            status: task.status,
-            taskList: taskList.title,
+            notes: task.body?.content || '',
+            due: task.dueDateTime?.dateTime || null,
+            status: task.status === 'completed' ? 'completed' : 'needsAction',
+            taskList: taskList.displayName,
             taskListId: taskList.id
           });
         });
       } catch (listError) {
-        console.error(`⚠️  Failed to get tasks from list ${taskList.title}:`, listError.message);
+        console.error(`⚠️  Failed to get tasks from list ${taskList.displayName}:`, listError.message);
         // Continue with other lists
       }
     }
@@ -249,14 +254,13 @@ async function listAllTasks(googleSub) {
     console.error('❌ [TASKS_ERROR] Failed to list tasks');
     console.error('Details:', {
       errorMessage: error.message,
-      statusCode: error.response?.status,
-      errorData: error.response?.data,
+      statusCode: error.statusCode,
       timestamp: new Date().toISOString()
     });
     throw mapGoogleApiError(error, {
       message: 'Failed to list all tasks',
       details: {
-        googleSub,
+        microsoftId,
         taskListsAttempted: taskLists.map(list => list?.id).filter(Boolean),
         taskListCount: taskLists.length
       },
@@ -268,29 +272,29 @@ async function listAllTasks(googleSub) {
 /**
  * Create a new task
  */
-async function createTask(googleSub, taskData) {
+async function createTask(microsoftId, taskData) {
   try {
-    const tasksClient = await getTasksClient(googleSub);
+    const client = await getGraphClient(microsoftId);
 
     console.log('🔍 Looking for default task list...');
 
     // Get default task list
-    const taskListsResponse = await tasksClient.tasklists.list({
-      maxResults: 1
-    });
+    const listResponse = await client.api('/me/todo/lists')
+      .top(1)
+      .get();
 
-    const taskLists = taskListsResponse.data.items || [];
+    const taskLists = listResponse.value || [];
 
     if (taskLists.length === 0) {
-      throwServiceError('No task lists found. Please create a task list in Google Tasks first.', {
+      throwServiceError('No task lists found. Please create a task list in Microsoft To Do first.', {
         statusCode: 404,
         code: 'TASK_LISTS_NOT_FOUND',
-        details: { googleSub }
+        details: { microsoftId }
       });
     }
 
     const defaultTaskListId = taskLists[0].id;
-    console.log(`✅ Using task list: ${taskLists[0].title} (${defaultTaskListId})`);
+    console.log(`✅ Using task list: ${taskLists[0].displayName} (${defaultTaskListId})`);
 
     // Prepare request body
     const requestBody = {
@@ -299,44 +303,47 @@ async function createTask(googleSub, taskData) {
 
     // Add optional fields only if provided
     if (taskData.notes) {
-      requestBody.notes = taskData.notes;
+      requestBody.body = {
+        content: taskData.notes,
+        contentType: 'text'
+      };
     }
 
     if (taskData.due) {
-      // Convert due date to RFC 3339 format (required by Tasks API)
-      // Tasks API requires full timestamp but only uses the date part
+      // Convert due date to Microsoft format
       let dueDate = taskData.due;
-      
-      // If just date (YYYY-MM-DD), convert to RFC 3339
+
+      // If just date (YYYY-MM-DD), convert to ISO 8601 datetime
       if (/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
-        dueDate = `${dueDate}T00:00:00.000Z`;
+        dueDate = `${dueDate}T00:00:00`;
       }
-      // If datetime without timezone, add UTC timezone
-      else if (!dueDate.endsWith('Z') && !dueDate.includes('+')) {
-        dueDate = `${dueDate}.000Z`;
+      // Remove Z if present (Microsoft To Do expects local time)
+      else if (dueDate.endsWith('Z')) {
+        dueDate = dueDate.slice(0, -1);
       }
-      
-      requestBody.due = dueDate;
-      console.log(`📅 Due date converted to RFC 3339: ${dueDate}`);
+
+      requestBody.dueDateTime = {
+        dateTime: dueDate,
+        timeZone: 'UTC'
+      };
+      console.log(`📅 Due date converted to Microsoft format: ${dueDate}`);
     }
 
     console.log('📝 Creating task with data:', requestBody);
 
     // Create task
-    const response = await tasksClient.tasks.insert({
-      tasklist: defaultTaskListId,
-      requestBody: requestBody
-    });
+    const response = await client.api(`/me/todo/lists/${defaultTaskListId}/tasks`)
+      .post(requestBody);
 
-    console.log('✅ Task created successfully:', response.data.id);
+    console.log('✅ Task created successfully:', response.id);
 
     return {
-      id: response.data.id,
-      title: response.data.title,
-      notes: response.data.notes || '',
-      due: response.data.due || null,
-      status: response.data.status,
-      taskList: taskLists[0].title,
+      id: response.id,
+      title: response.title,
+      notes: response.body?.content || '',
+      due: response.dueDateTime?.dateTime || null,
+      status: response.status === 'completed' ? 'completed' : 'needsAction',
+      taskList: taskLists[0].displayName,
       taskListId: defaultTaskListId
     };
 
@@ -345,14 +352,13 @@ async function createTask(googleSub, taskData) {
     console.error('Details:', {
       title: taskData.title,
       errorMessage: error.message,
-      statusCode: error.response?.status,
-      errorData: error.response?.data,
+      statusCode: error.statusCode,
       timestamp: new Date().toISOString()
     });
     throw mapGoogleApiError(error, {
       message: 'Failed to create task',
       details: {
-        googleSub,
+        microsoftId,
         title: taskData?.title
       },
       cause: error
@@ -363,14 +369,15 @@ async function createTask(googleSub, taskData) {
 /**
  * Update task (mark as completed or update details)
  */
-async function updateTask(googleSub, taskListId, taskId, updates) {
+async function updateTask(microsoftId, taskListId, taskId, updates) {
   try {
-    const tasksClient = await getTasksClient(googleSub);
+    const client = await getGraphClient(microsoftId);
 
     const requestBody = {};
 
     if (updates.status !== undefined) {
-      requestBody.status = updates.status; // 'completed' or 'needsAction'
+      // Map Google Tasks status to Microsoft To Do status
+      requestBody.status = updates.status === 'completed' ? 'completed' : 'notStarted';
     }
 
     if (updates.title !== undefined) {
@@ -378,29 +385,43 @@ async function updateTask(googleSub, taskListId, taskId, updates) {
     }
 
     if (updates.notes !== undefined) {
-      requestBody.notes = updates.notes;
+      requestBody.body = {
+        content: updates.notes,
+        contentType: 'text'
+      };
     }
 
     if (updates.due !== undefined) {
-      requestBody.due = updates.due;
+      let dueDate = updates.due;
+
+      // Remove Z if present
+      if (dueDate && dueDate.endsWith('Z')) {
+        dueDate = dueDate.slice(0, -1);
+      }
+
+      if (dueDate) {
+        requestBody.dueDateTime = {
+          dateTime: dueDate,
+          timeZone: 'UTC'
+        };
+      } else {
+        requestBody.dueDateTime = null;
+      }
     }
 
     console.log('📝 Updating task with data:', requestBody);
 
-    const response = await tasksClient.tasks.patch({
-      tasklist: taskListId,
-      task: taskId,
-      requestBody: requestBody
-    });
+    const response = await client.api(`/me/todo/lists/${taskListId}/tasks/${taskId}`)
+      .patch(requestBody);
 
     console.log('✅ Task updated successfully:', taskId);
 
     return {
-      id: response.data.id,
-      title: response.data.title,
-      notes: response.data.notes || '',
-      due: response.data.due || null,
-      status: response.data.status
+      id: response.id,
+      title: response.title,
+      notes: response.body?.content || '',
+      due: response.dueDateTime?.dateTime || null,
+      status: response.status === 'completed' ? 'completed' : 'needsAction'
     };
 
   } catch (error) {
@@ -410,8 +431,7 @@ async function updateTask(googleSub, taskListId, taskId, updates) {
       taskListId,
       updates,
       errorMessage: error.message,
-      statusCode: error.response?.status,
-      errorData: error.response?.data,
+      statusCode: error.statusCode,
       timestamp: new Date().toISOString()
     });
     throw error;
@@ -421,14 +441,12 @@ async function updateTask(googleSub, taskListId, taskId, updates) {
 /**
  * Delete a task
  */
-async function deleteTask(googleSub, taskListId, taskId) {
+async function deleteTask(microsoftId, taskListId, taskId) {
   try {
-    const tasksClient = await getTasksClient(googleSub);
+    const client = await getGraphClient(microsoftId);
 
-    await tasksClient.tasks.delete({
-      tasklist: taskListId,
-      task: taskId
-    });
+    await client.api(`/me/todo/lists/${taskListId}/tasks/${taskId}`)
+      .delete();
 
     console.log('✅ Task deleted successfully:', taskId);
     return { success: true };
@@ -439,8 +457,7 @@ async function deleteTask(googleSub, taskListId, taskId) {
       taskId,
       taskListId,
       errorMessage: error.message,
-      statusCode: error.response?.status,
-      errorData: error.response?.data,
+      statusCode: error.statusCode,
       timestamp: new Date().toISOString()
     });
     throw error;
