@@ -23,8 +23,8 @@ describe('Invalid Grant Error Handling (Token Revocation)', () => {
               updateCalls.push({ filter, update });
               return { modifiedCount: 1 };
             },
-            findOne: async ({ google_sub }) => ({
-              google_sub,
+            findOne: async ({ microsoft_id }) => ({
+              microsoft_id,
               email: 'test@example.com',
               encrypted_refresh_token: 'encrypted_xxx',
               refresh_token_iv: 'iv_xxx',
@@ -41,8 +41,8 @@ describe('Invalid Grant Error Handling (Token Revocation)', () => {
     globalThis.__facadeMocks = {
       database: mockDb,
       databaseService: {
-        getUserByGoogleSub: async (googleSub) => ({
-          googleSub,
+        getUserByGoogleSub: async (microsoftId) => ({
+          microsoftId,
           email: 'test@example.com',
           refreshToken: 'refresh_token_that_will_fail',
           tokenExpiry: new Date(Date.now() - 1000)
@@ -71,7 +71,7 @@ describe('Invalid Grant Error Handling (Token Revocation)', () => {
     const { refreshSingleUser } = await import('../../src/services/backgroundRefreshService.js');
 
     const rawUserDoc = {
-      google_sub: 'test_user_123',
+      microsoft_id: 'test_user_123',
       email: 'test@example.com',
       refresh_token_revoked: false
     };
@@ -89,7 +89,7 @@ describe('Invalid Grant Error Handling (Token Revocation)', () => {
 
     assert.ok(revokedUpdate, 'Should mark refresh_token_revoked = true');
     assert.strictEqual(
-      revokedUpdate.filter.google_sub,
+      revokedUpdate.filter.microsoft_id,
       'test_user_123',
       'Should update correct user'
     );
@@ -99,7 +99,7 @@ describe('Invalid Grant Error Handling (Token Revocation)', () => {
     const { refreshSingleUser } = await import('../../src/services/backgroundRefreshService.js');
 
     const rawUserDoc = {
-      google_sub: 'test_user_456',
+      microsoft_id: 'test_user_456',
       email: 'test2@example.com',
       refresh_token_revoked: false
     };
@@ -123,7 +123,7 @@ describe('Invalid Grant Error Handling (Token Revocation)', () => {
     const { refreshSingleUser } = await import('../../src/services/backgroundRefreshService.js');
 
     const rawUserDoc = {
-      google_sub: 'already_revoked_user',
+      microsoft_id: 'already_revoked_user',
       email: 'revoked@example.com',
       refresh_token_revoked: true // Already marked
     };

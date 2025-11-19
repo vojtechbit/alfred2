@@ -24,7 +24,7 @@ describe('calendarSchedule macro', () => {
       { start: '2025-03-01T11:00:00Z', end: '2025-03-01T12:00:00Z' }
     ];
 
-    const checkConflicts = mock.fn(async (googleSub, { start }) => [{ id: `conflict-${start}` }]);
+    const checkConflicts = mock.fn(async (microsoftId, { start }) => [{ id: `conflict-${start}` }]);
 
     globalThis.__facadeMocks = {
       calendarService: { checkConflicts }
@@ -114,7 +114,7 @@ describe('calendarSchedule macro', () => {
     const checkConflicts = mock.fn(async () => []);
 
     let capturedEventData;
-    const createCalendarEvent = mock.fn(async (googleSub, eventData) => {
+    const createCalendarEvent = mock.fn(async (microsoftId, eventData) => {
       capturedEventData = eventData;
       return {
         id: 'evt-789',

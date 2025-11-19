@@ -28,11 +28,11 @@ beforeEach(() => {
       getEmailPreview: (...args) => getEmailPreviewMock(...args)
     },
     databaseService: {
-      async getUserByGoogleSub(googleSub) {
+      async getUserByGoogleSub(microsoftId) {
         return {
           _id: 'user-test',
           google: {
-            sub: googleSub,
+            sub: microsoftId,
             accessToken: 'test-access-token',
             refreshToken: 'test-refresh-token'
           }

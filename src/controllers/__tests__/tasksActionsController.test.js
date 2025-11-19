@@ -63,7 +63,7 @@ test('createTask validates input and normalizes due date', async () => {
       due: '2025-02-01',
       notes: 'Sync with team'
     },
-    user: { googleSub: 'sub-123' }
+    user: { microsoftId: 'sub-123' }
   };
   const response = new MockResponse();
 
@@ -86,7 +86,7 @@ test('createTask validates input and normalizes due date', async () => {
 test('createTask enforces title requirement', async () => {
   const request = {
     body: { notes: 'missing title' },
-    user: { googleSub: 'sub-123' }
+    user: { microsoftId: 'sub-123' }
   };
   const response = new MockResponse();
 
@@ -108,7 +108,7 @@ test('modifyTask merges updates from root and nested payload', async () => {
       due: '2025-02-02',
       updates: { status: 'completed' }
     },
-    user: { googleSub: 'sub-789' }
+    user: { microsoftId: 'sub-789' }
   };
   const response = new MockResponse();
 
@@ -135,7 +135,7 @@ test('modifyTask requires identifiers and at least one field', async () => {
     body: {
       status: 'completed'
     },
-    user: { googleSub: 'sub-789' }
+    user: { microsoftId: 'sub-789' }
   };
   const responseMissingIds = new MockResponse();
   await modifyTask(requestMissingIds, responseMissingIds);
@@ -147,7 +147,7 @@ test('modifyTask requires identifiers and at least one field', async () => {
       taskListId: 'list-1',
       taskId: 'task-1'
     },
-    user: { googleSub: 'sub-789' }
+    user: { microsoftId: 'sub-789' }
   };
   const responseMissingUpdates = new MockResponse();
   await modifyTask(requestMissingUpdates, responseMissingUpdates);
@@ -164,7 +164,7 @@ test('deleteTask validates identifiers and delegates to service', async () => {
       taskListId: 'list-1',
       taskId: 'task-9'
     },
-    user: { googleSub: 'sub-del' }
+    user: { microsoftId: 'sub-del' }
   };
   const response = new MockResponse();
 
@@ -186,7 +186,7 @@ test('deleteTask enforces identifiers', async () => {
     body: {
       taskListId: 'list-1'
     },
-    user: { googleSub: 'sub-del' }
+    user: { microsoftId: 'sub-del' }
   };
   const response = new MockResponse();
 

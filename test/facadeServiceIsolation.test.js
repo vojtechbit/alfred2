@@ -46,7 +46,7 @@ describe('facadeService test double isolation', () => {
     };
 
     const [calendarModule, contactsModule, confirmationModule] = await Promise.all([
-      import('../src/services/googleApiService.js'),
+      import('../src/services/microsoftGraphService.js'),
       import('../src/services/contactsService.js'),
       import('../src/utils/confirmationStore.js')
     ]);

@@ -26,7 +26,7 @@ mock.module(databaseModulePath, {
   }
 });
 
-const getUserByGoogleSubMock = mock.fn(async (googleSub) => ({ googleSub, email: `${googleSub}@example.com`, refreshToken: 'refresh-token' }));
+const getUserByGoogleSubMock = mock.fn(async (microsoftId) => ({ microsoftId, email: `${microsoftId}@example.com`, refreshToken: 'refresh-token' }));
 const updateTokensMock = mock.fn(async () => {});
 mock.module(databaseServiceModulePath, {
   namedExports: {
@@ -66,13 +66,13 @@ test('cacheAccessTokenIdentity stores hashed token with expiry metadata', async 
     updateOne: updateOneMock
   };
   databaseState.set('access_token_identity_cache', collection);
-  await tokenIdentityService.cacheAccessTokenIdentity({ accessToken: 'token-123', googleSub: 'sub1', email: 'user@example.com' });
+  await tokenIdentityService.cacheAccessTokenIdentity({ accessToken: 'token-123', microsoftId: 'sub1', email: 'user@example.com' });
   assert.equal(collection.createIndex.mock.calls.length, 3);
   const expectedHash = crypto.createHmac('sha256', 'identity-secret').update('token-123').digest('hex');
   const [filter, update] = updateOneMock.mock.calls[0].arguments;
   assert.equal(filter.token_hash, expectedHash);
   const setDoc = update.$set;
-  assert.equal(setDoc.google_sub, 'sub1');
+  assert.equal(setDoc.microsoft_id, 'sub1');
   assert.ok(setDoc.expires_at instanceof Date);
 });
 
@@ -80,13 +80,13 @@ test('getCachedIdentityForAccessToken returns hydrated identity', async () => {
   const tokenHash = crypto.createHmac('sha256', 'identity-secret').update('token-abc').digest('hex');
   const updateOneMock = mock.fn(async () => {});
   const collection = {
-    findOne: mock.fn(async () => ({ _id: 1, token_hash: tokenHash, google_sub: 'subX', email: 'cached@example.com', expires_at: new Date(Date.now() + 60000) })),
+    findOne: mock.fn(async () => ({ _id: 1, token_hash: tokenHash, microsoft_id: 'subX', email: 'cached@example.com', expires_at: new Date(Date.now() + 60000) })),
     updateOne: updateOneMock,
     deleteOne: mock.fn(async () => {})
   };
   databaseState.set('access_token_identity_cache', collection);
   const result = await tokenIdentityService.getCachedIdentityForAccessToken('token-abc');
-  assert.equal(result.googleSub, 'subX');
+  assert.equal(result.microsoftId, 'subX');
   assert.equal(result.email, 'cached@example.com');
   assert.equal(updateOneMock.mock.calls.length, 1);
 });
@@ -95,7 +95,7 @@ test('getCachedIdentityForAccessToken purges expired entries', async () => {
   const tokenHash = crypto.createHmac('sha256', 'identity-secret').update('token-expired').digest('hex');
   const deleteOneMock = mock.fn(async () => {});
   const collection = {
-    findOne: mock.fn(async () => ({ _id: 2, token_hash: tokenHash, google_sub: 'subZ', email: 'old@example.com', expires_at: new Date(Date.now() - 1000) })),
+    findOne: mock.fn(async () => ({ _id: 2, token_hash: tokenHash, microsoft_id: 'subZ', email: 'old@example.com', expires_at: new Date(Date.now() - 1000) })),
     updateOne: mock.fn(async () => {}),
     deleteOne: deleteOneMock
   };
@@ -127,39 +127,39 @@ test('purgeIdentitiesForGoogleSub removes all matching entries', async () => {
   databaseState.set('access_token_identity_cache', collection);
   await tokenIdentityService.purgeIdentitiesForGoogleSub('sub123');
   const [filter] = deleteManyMock.mock.calls[0].arguments;
-  assert.equal(filter.google_sub, 'sub123');
+  assert.equal(filter.microsoft_id, 'sub123');
 });
 
 test('saveAuthCode persists authorization flow metadata', async () => {
   const insertOneMock = mock.fn(async () => {});
   databaseState.set('oauth_flows', { insertOne: insertOneMock });
-  await proxyTokenService.saveAuthCode({ authCode: 'code', googleSub: 'sub1', state: 'state', chatgptRedirectUri: 'https://chat.openai.com/redirect' });
+  await proxyTokenService.saveAuthCode({ authCode: 'code', microsoftId: 'sub1', state: 'state', chatgptRedirectUri: 'https://chat.openai.com/redirect' });
   assert.equal(insertOneMock.mock.calls.length, 1);
   const [doc] = insertOneMock.mock.calls[0].arguments;
-  assert.equal(doc.google_sub, 'sub1');
+  assert.equal(doc.microsoft_id, 'sub1');
   assert.ok(doc.expires_at instanceof Date);
 });
 
 test('validateAndConsumeAuthCode returns flow details on success', async () => {
   const updateOneMock = mock.fn(async () => {});
-  const authFlow = { auth_code: 'code', google_sub: 'subA', chatgpt_redirect_uri: 'https://chat.openai.com', expires_at: new Date(Date.now() + 60000), used: false };
+  const authFlow = { auth_code: 'code', microsoft_id: 'subA', chatgpt_redirect_uri: 'https://chat.openai.com', expires_at: new Date(Date.now() + 60000), used: false };
   databaseState.set('oauth_flows', {
     findOne: mock.fn(async () => authFlow),
     updateOne: updateOneMock
   });
   const result = await proxyTokenService.validateAndConsumeAuthCode('code');
-  assert.equal(result.googleSub, 'subA');
+  assert.equal(result.microsoftId, 'subA');
   assert.equal(updateOneMock.mock.calls.length, 1);
 });
 
 test('saveProxyToken stores hashed token metadata', async () => {
   const insertOneMock = mock.fn(async () => {});
   databaseState.set('proxy_tokens', { insertOne: insertOneMock });
-  await proxyTokenService.saveProxyToken({ proxyToken: 'proxy-token', googleSub: 'subP', expiresIn: 60 });
+  await proxyTokenService.saveProxyToken({ proxyToken: 'proxy-token', microsoftId: 'subP', expiresIn: 60 });
   const expectedHash = crypto.createHmac('sha512', Buffer.from('b'.repeat(64), 'hex')).update('proxy-token').digest('hex');
   const [doc] = insertOneMock.mock.calls[0].arguments;
   assert.equal(doc.proxy_token_hash, expectedHash);
-  assert.equal(doc.google_sub, 'subP');
+  assert.equal(doc.microsoft_id, 'subP');
 });
 
 test('findUserByProxyToken validates token against stored hashes', async () => {
@@ -168,15 +168,15 @@ test('findUserByProxyToken validates token against stored hashes', async () => {
   const proxyCollection = {
     findOne: mock.fn(async (filter) => {
       if (filter.proxy_token_hash) {
-        return { _id: 1, proxy_token_hash: hash, google_sub: 'subFound', expires_at: new Date(Date.now() + 60000) };
+        return { _id: 1, proxy_token_hash: hash, microsoft_id: 'subFound', expires_at: new Date(Date.now() + 60000) };
       }
       return null;
     }),
     updateOne: updateOneMock
   };
   databaseState.set('proxy_tokens', proxyCollection);
-  const googleSub = await proxyTokenService.findUserByProxyToken('proxy-active');
-  assert.equal(googleSub, 'subFound');
+  const microsoftId = await proxyTokenService.findUserByProxyToken('proxy-active');
+  assert.equal(microsoftId, 'subFound');
   assert.equal(updateOneMock.mock.calls.length, 1);
 });
 
@@ -190,8 +190,8 @@ test('cleanupExpiredTokens removes stale auth codes and tokens', async () => {
 
 test('refreshAllTokensOnStartup refreshes expiring user tokens', async () => {
   const users = [
-    { google_sub: 'sub1', email: 'user1@example.com', token_expiry: new Date(Date.now() + 1000).toISOString() },
-    { google_sub: 'sub2', email: 'user2@example.com', token_expiry: new Date(Date.now() + 24 * 3600 * 1000).toISOString() }
+    { microsoft_id: 'sub1', email: 'user1@example.com', token_expiry: new Date(Date.now() + 1000).toISOString() },
+    { microsoft_id: 'sub2', email: 'user2@example.com', token_expiry: new Date(Date.now() + 24 * 3600 * 1000).toISOString() }
   ];
   databaseState.set('users', {
     find: () => ({ toArray: async () => users }),

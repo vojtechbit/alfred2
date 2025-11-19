@@ -353,20 +353,24 @@ Ready for final push! 🎉
 - ✅ Middleware & Routes
 - ✅ Utilities & Error Handling
 - ✅ Token Management
+- ✅ Test Scripts (17 test files)
 
-**Total commits:** 4
+**Total commits:** 8
 1. `c35d642` - Prepare for Microsoft migration (move Google to legacy)
 2. `ee91d6d` - Migrate core services
 3. `9ca816c` - Implement Mail + Calendar + Tasks APIs
 4. `93f6b64` - Rewrite Contacts Service for Excel Online
 5. `3ab347a` - Add migration status documentation
 6. `448dccc` - Complete migration (controllers + services)
+7. `b629e88` - Mark migration as 100% complete in documentation
+8. `e1d714f` - Update all test scripts for Microsoft migration
 
 **Code statistics:**
 - New code: ~3,600 lines
-- Modified files: 30+ files
+- Modified files: 47+ files (30 source files + 17 test files)
 - Services: 4 major services rewritten
 - Controllers: 12 controllers updated
+- Test files: 17 test files updated
 
 **Ready for production deployment!**
 
