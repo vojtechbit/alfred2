@@ -1,4 +1,4 @@
-import { getAuthUrl, getTokensFromCode } from '../config/oauth.js';
+import { getAuthUrl, getTokensFromCode } from '../config/microsoft.js';
 import { saveUser } from '../services/databaseService.js';
 import {
   generateAuthCode,
@@ -7,7 +7,7 @@ import {
   validateAndConsumeAuthCode,
   saveProxyToken
 } from '../services/proxyTokenService.js';
-import { google } from 'googleapis';
+import { microsoft } from 'microsoftapis';
 import dotenv from 'dotenv';
 import { wrapModuleFunctions } from '../utils/advancedDebugging.js';
 import { sanitizeForLog, summarizeSecret } from '../utils/redact.js';
@@ -30,7 +30,7 @@ const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || 'your-secure-secr
  * GET /oauth/authorize
  * 
  * ChatGPT redirects user here to start OAuth flow
- * We redirect to Google OAuth
+ * We redirect to Microsoft OAuth
  */
 async function authorize(req, res) {
   try {
@@ -81,19 +81,19 @@ async function authorize(req, res) {
       timestamp: Date.now()
     };
 
-    // Encode state data to pass through Google OAuth
+    // Encode state data to pass through Microsoft OAuth
     const encodedState = Buffer.from(JSON.stringify(stateData)).toString('base64url');
 
-    // Get Google OAuth URL with our encoded state and PKCE challenge
-    const googleAuthUrl = getAuthUrl(encodedState, {
+    // Get Microsoft OAuth URL with our encoded state and PKCE challenge
+    const microsoftAuthUrl = getAuthUrl(encodedState, {
       code_challenge: codeChallenge,
       code_challenge_method: 'S256'
     });
 
-    console.log('✅ Redirecting to Google OAuth...');
+    console.log('✅ Redirecting to Microsoft OAuth...');
 
-    // Redirect user to Google OAuth consent screen
-    res.redirect(googleAuthUrl);
+    // Redirect user to Microsoft OAuth consent screen
+    res.redirect(microsoftAuthUrl);
 
   } catch (error) {
     console.error('❌ [OAUTH_PROXY_ERROR] Authorization failed');
@@ -113,14 +113,14 @@ async function authorize(req, res) {
  * OAuth Callback Endpoint
  * GET /oauth/callback
  * 
- * Google redirects here after user consent
+ * Microsoft redirects here after user consent
  * We exchange code for tokens, create proxy token, redirect to ChatGPT
  */
 async function callback(req, res) {
   try {
     const { code, error, state } = req.query;
 
-    console.log('🔄 [OAUTH_PROXY] Callback received from Google');
+    console.log('🔄 [OAUTH_PROXY] Callback received from Microsoft');
 
     // Check if user denied access
     if (error) {
@@ -145,7 +145,7 @@ async function callback(req, res) {
           <head><title>Authorization Failed</title></head>
           <body style="font-family: Arial; padding: 50px; text-align: center;">
             <h1>❌ Authorization Failed</h1>
-            <p>Authorization code not received from Google.</p>
+            <p>Authorization code not received from Microsoft.</p>
             <p>Please try again.</p>
           </body>
         </html>
@@ -173,8 +173,8 @@ async function callback(req, res) {
 
     console.log('✅ State decoded');
 
-    // Exchange Google authorization code for tokens with PKCE verifier
-    console.log('🔄 Exchanging Google code for tokens (with PKCE)...');
+    // Exchange Microsoft authorization code for tokens with PKCE verifier
+    console.log('🔄 Exchanging Microsoft code for tokens (with PKCE)...');
     const codeVerifier = stateData.code_verifier;
 
     if (!codeVerifier) {
@@ -193,17 +193,17 @@ async function callback(req, res) {
     const tokens = await getTokensFromCode(code, codeVerifier);
 
     if (!tokens.access_token || !tokens.refresh_token) {
-      throw new Error('Access token or refresh token missing from Google response');
+      throw new Error('Access token or refresh token missing from Microsoft response');
     }
 
-    console.log('✅ Google tokens received from Google OAuth');
+    console.log('✅ Microsoft tokens received from Microsoft OAuth');
 
-    // Get user info from Google
+    // Get user info from Microsoft
     const { createOAuthClient } = await import('../config/oauth.js');
     const oauth2Client = createOAuthClient();
     oauth2Client.setCredentials(tokens);
 
-    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const oauth2 = microsoft.oauth2({ version: 'v2', auth: oauth2Client });
     const userInfoResponse = await oauth2.userinfo.get();
     const userInfo = userInfoResponse.data;
 
@@ -212,9 +212,9 @@ async function callback(req, res) {
     // Calculate token expiry using shared utility
     const expiryDate = determineExpiryDate(tokens);
 
-    // Save user to database with encrypted Google tokens
+    // Save user to database with encrypted Microsoft tokens
     await saveUser({
-      googleSub: userInfo.id,
+      microsoftId: userInfo.id,
       email: userInfo.email,
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
@@ -226,10 +226,10 @@ async function callback(req, res) {
     // Generate authorization code for ChatGPT
     const authCode = generateAuthCode();
     
-    // Save auth code with mapping to google_sub
+    // Save auth code with mapping to microsoft_sub
     await saveAuthCode({
       authCode: authCode,
-      googleSub: userInfo.id,
+      microsoftId: userInfo.id,
       state: stateData.chatgpt_state,
       chatgptRedirectUri: stateData.chatgpt_redirect_uri
     });
@@ -329,7 +329,7 @@ async function token(req, res) {
       });
     }
 
-    const { googleSub, chatgptRedirectUri } = authFlow;
+    const { microsoftId, chatgptRedirectUri } = authFlow;
 
     if (chatgptRedirectUri !== redirect_uri) {
       console.error('❌ redirect_uri mismatch for authorization code', {
@@ -342,16 +342,16 @@ async function token(req, res) {
       });
     }
 
-    console.log('✅ Authorization code validated for user:', googleSub);
+    console.log('✅ Authorization code validated for user:', microsoftId);
 
     // Generate proxy token for ChatGPT
     const proxyToken = generateProxyToken();
     const expiresIn = 2592000; // 30 days in seconds
 
-    // Save proxy token with mapping to google_sub
+    // Save proxy token with mapping to microsoft_sub
     await saveProxyToken({
       proxyToken: proxyToken,
-      googleSub: googleSub,
+      microsoftId: microsoftId,
       expiresIn: expiresIn
     });
 

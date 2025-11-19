@@ -1,6 +1,6 @@
-import { getUserByGoogleSub, updateTokens } from './databaseService.js';
+import { getUserByMicrosoftId, updateTokens } from './databaseService.js';
 import { determineExpiryDate } from '../utils/tokenExpiry.js';
-import { refreshAccessToken } from '../config/oauth.js';
+import { refreshAccessToken } from '../config/microsoft.js';
 import { getDatabase } from '../config/database.js';
 import { wrapModuleFunctions } from '../utils/advancedDebugging.js';
 
@@ -20,11 +20,11 @@ async function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function clearRefreshFailure(googleSub) {
+async function clearRefreshFailure(microsoftId) {
   try {
     const db = await getDatabase();
     await db.collection('users').updateOne(
-      { google_sub: googleSub },
+      { microsoft_id: microsoftId },
       {
         $set: { refresh_token_revoked: false },
         $unset: { refresh_error: '' }
@@ -35,7 +35,7 @@ async function clearRefreshFailure(googleSub) {
   }
 }
 
-async function markRefreshFailure(googleSub, errorInfo, refreshTokenRevoked = false) {
+async function markRefreshFailure(microsoftId, errorInfo, refreshTokenRevoked = false) {
   try {
     const db = await getDatabase();
     const updateDoc = {
@@ -50,7 +50,7 @@ async function markRefreshFailure(googleSub, errorInfo, refreshTokenRevoked = fa
     }
 
     await db.collection('users').updateOne(
-      { google_sub: googleSub },
+      { microsoft_id: microsoftId },
       { $set: updateDoc }
     );
   } catch (error) {
@@ -60,7 +60,7 @@ async function markRefreshFailure(googleSub, errorInfo, refreshTokenRevoked = fa
 
 async function refreshSingleUser(rawUserDoc, options = {}) {
   const { reason } = options;
-  const googleSub = rawUserDoc.google_sub;
+  const microsoftId = rawUserDoc.microsoft_id;
   const email = rawUserDoc.email;
 
   if (rawUserDoc.refresh_token_revoked) {
@@ -68,7 +68,7 @@ async function refreshSingleUser(rawUserDoc, options = {}) {
     return { status: 'skipped', reason: 'refresh_token_revoked' };
   }
 
-  const userData = await getUserByGoogleSub(googleSub);
+  const userData = await getUserByMicrosoftId(microsoftId);
 
   if (!userData || !userData.refreshToken) {
     console.warn(`⏭️  Skipping ${email} (no refresh token available)`);
@@ -82,7 +82,7 @@ async function refreshSingleUser(rawUserDoc, options = {}) {
     const newTokens = await refreshAccessToken(userData.refreshToken);
     const expiryDate = determineExpiryDate(newTokens);
 
-    await updateTokens(googleSub, {
+    await updateTokens(microsoftId, {
       accessToken: newTokens.access_token,
       refreshToken: newTokens.refresh_token || userData.refreshToken,
       expiryDate,
@@ -90,7 +90,7 @@ async function refreshSingleUser(rawUserDoc, options = {}) {
       source: reason ? `refresh:${reason}` : 'refresh:background'
     });
 
-    await clearRefreshFailure(googleSub);
+    await clearRefreshFailure(microsoftId);
     console.log(`✅ Refreshed token for ${email}`);
     return { status: 'success' };
   } catch (error) {
@@ -105,7 +105,7 @@ async function refreshSingleUser(rawUserDoc, options = {}) {
     });
 
     await markRefreshFailure(
-      googleSub,
+      microsoftId,
       {
         status,
         errorCode,

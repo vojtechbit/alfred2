@@ -1,4 +1,4 @@
-import { getAuthUrl, getTokensFromCode } from '../config/oauth.js';
+import { getAuthUrl, getTokensFromCode } from '../config/microsoft.js';
 import { saveUser } from '../services/databaseService.js';
 import { handleControllerError } from '../utils/errors.js';
 import { determineExpiryDate } from '../utils/tokenExpiry.js';
@@ -10,7 +10,7 @@ dotenv.config();
 
 /**
  * Initiate OAuth flow
- * GET /auth/google
+ * GET /auth/microsoft
  */
 async function initiateOAuth(req, res) {
   try {
@@ -23,7 +23,7 @@ async function initiateOAuth(req, res) {
     console.log('🔐 Initiating OAuth flow');
     console.log('Redirect URL:', authUrl);
 
-    // Redirect user to Google consent screen
+    // Redirect user to Microsoft consent screen
     res.redirect(authUrl);
 
   } catch (error) {
@@ -36,8 +36,8 @@ async function initiateOAuth(req, res) {
 }
 
 /**
- * Handle OAuth callback from Google
- * GET /auth/google/callback
+ * Handle OAuth callback from Microsoft
+ * GET /auth/microsoft/callback
  */
 async function handleCallback(req, res) {
   try {
@@ -82,22 +82,14 @@ async function handleCallback(req, res) {
     const tokens = await getTokensFromCode(code);
 
     if (!tokens.access_token || !tokens.refresh_token) {
-      throw new Error('Access token or refresh token missing from Google response');
+      throw new Error('Access token or refresh token missing from Microsoft response');
     }
 
-    console.log('✅ Tokens received from Google');
+    console.log('✅ Tokens received from Microsoft');
 
-    // Get user info from access token
-    const { google } = await import('googleapis');
-    const { createOAuthClient } = await import('../config/oauth.js');
-
-    // Create dedicated OAuth2 client for this request
-    const oauth2Client = createOAuthClient();
-    oauth2Client.setCredentials(tokens);
-
-    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
-    const userInfoResponse = await oauth2.userinfo.get();
-    const userInfo = userInfoResponse.data;
+    // Get user info from Microsoft Graph API
+    const { getUserInfo } = await import('../config/microsoft.js');
+    const userInfo = await getUserInfo(tokens.access_token);
 
     console.log('✅ User info retrieved:', userInfo.email);
 
@@ -106,7 +98,7 @@ async function handleCallback(req, res) {
 
     // Save user to database with encrypted tokens
     await saveUser({
-      googleSub: userInfo.id,
+      microsoftId: userInfo.id,
       email: userInfo.email,
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
@@ -124,7 +116,7 @@ async function handleCallback(req, res) {
         </head>
         <body style="font-family: Arial; padding: 50px; text-align: center;">
           <h1>✅ Authentication Successful!</h1>
-          <p>You have successfully connected your Google account.</p>
+          <p>You have successfully connected your Microsoft account.</p>
           <p><strong>${userInfo.email}</strong></p>
           <p>Redirecting back to ChatGPT...</p>
           <script>
@@ -172,7 +164,7 @@ async function checkStatus(req, res) {
       authenticated: true,
       user: {
         email: req.user.email,
-        googleSub: req.user.googleSub,
+        microsoftId: req.user.microsoftId,
         name: req.user.name
       },
       timestamp: new Date().toISOString()
