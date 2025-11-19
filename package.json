@@ -1,7 +1,7 @@
 {
-  "name": "gmail-calendar-oauth-server",
-  "version": "3.2.1",
-  "description": "OAuth proxy server for Custom GPT Actions with Gmail & Calendar",
+  "name": "alfred2-oauth-server",
+  "version": "4.0.0",
+  "description": "OAuth proxy server for Custom GPT Actions with Microsoft 365 (Outlook, Calendar, To Do)",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
@@ -11,20 +11,24 @@
   },
   "keywords": [
     "oauth",
-    "gmail",
+    "microsoft",
+    "outlook",
     "calendar",
+    "todo",
     "chatgpt",
-    "custom-gpt"
+    "custom-gpt",
+    "microsoft-graph"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@microsoft/microsoft-graph-client": "^3.0.7",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
-    "googleapis": "^128.0.0",
     "helmet": "^7.1.0",
+    "isomorphic-fetch": "^3.0.0",
     "mongodb": "^6.3.0",
     "pdf-parse": "^1.1.1",
     "xlsx-js-style": "^1.2.0"
